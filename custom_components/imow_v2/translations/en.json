@@ -2,30 +2,63 @@
   "config": {
     "step": {
       "user": {
-        "title": "STIHL iMow v2 — Login",
-        "description": "Enter your STIHL myimow.stihl.com account credentials.",
+        "title": "Sign in to STIHL iMow",
+        "description": "Use the account from the iMow app or myimow.stihl.com. Your mowers are added as devices once sign-in works.",
         "data": {
           "username": "Email address",
           "password": "Password"
+        },
+        "data_description": {
+          "username": "The email address you sign in to the iMow app or myimow.stihl.com with.",
+          "password": "Your STIHL account password. It is stored in Home Assistant so the integration can sign in again if STIHL ends its session."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Sign in again",
+        "description": "STIHL no longer accepts the saved password for {username}. Enter the current password.",
+        "data": {
+          "password": "Password"
+        },
+        "data_description": {
+          "password": "Your STIHL account password. It is stored in Home Assistant so the integration can sign in again if STIHL ends its session."
+        }
+      },
+      "reconfigure": {
+        "title": "Update STIHL account details",
+        "description": "Change the email address or password for this STIHL account. To use a different account, add the integration again instead.",
+        "data": {
+          "username": "Email address",
+          "password": "Password"
+        },
+        "data_description": {
+          "username": "The email address you sign in to the iMow app or myimow.stihl.com with.",
+          "password": "Your STIHL account password. It is stored in Home Assistant so the integration can sign in again if STIHL ends its session."
         }
       }
     },
     "error": {
-      "invalid_auth": "Invalid email or password.",
-      "cannot_connect": "Could not connect to the STIHL cloud.",
-      "unknown": "An unexpected error occurred."
+      "invalid_auth": "STIHL didn't accept that email address and password.",
+      "cannot_connect": "Couldn't reach the STIHL sign-in service. Check your internet connection and try again.",
+      "unknown": "Something unexpected went wrong. Check the Home Assistant log for details."
     },
     "abort": {
-      "already_configured": "This account is already configured."
+      "already_configured": "This STIHL account is already set up.",
+      "reauth_successful": "Signed in again. The integration is reloading.",
+      "reconfigure_successful": "Account details updated. The integration is reloading.",
+      "wrong_account": "Those details belong to a different STIHL account. To add another account, use Add integration instead."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "iMow Options",
+        "title": "iMow options",
         "data": {
-          "scan_interval": "Poll interval (minutes)",
-          "tracking_interval": "GPS tracking interval while mowing (seconds, 0 = off)"
+          "scan_interval": "Poll interval",
+          "tracking_interval": "GPS tracking interval"
+        },
+        "data_description": {
+          "scan_interval": "How often to fetch the full status from the STIHL cloud. Live changes arrive straight away anyway, so this is only a safety net.",
+          "tracking_interval": "How often to update the mower's position while it is away from the dock. 0 turns tracking off."
         }
       }
     }

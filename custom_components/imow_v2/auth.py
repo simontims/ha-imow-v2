@@ -31,6 +31,13 @@ class ImowAuthError(Exception):
     """Raised when authentication fails."""
 
 
+class ImowInvalidCredentials(ImowAuthError):
+    """Raised when STIHL rejects the email or password.
+
+    The user has to act (re-authenticate); retrying will not help.
+    """
+
+
 class ImowTokenRejected(ImowAuthError):
     """Raised when STIHL rejects the refresh token, so a full login is needed.
 
@@ -71,6 +78,26 @@ class ImowAuth:
         if not self.access_token or not hasattr(self, "_token_acquired_at"):
             return False
         return (time.monotonic() - self._token_acquired_at) > (self.expires_in - 60)
+
+    @property
+    def account_id(self) -> str | None:
+        """The STIHL account's permanent ID (the access token's oid/sub claim).
+
+        Used as the config entry's unique ID, so changing the account's email
+        address doesn't break the entry. The token is only decoded, not
+        verified: it came straight from STIHL's token endpoint.
+        """
+        if not self.access_token:
+            return None
+        try:
+            payload = self.access_token.split(".")[1]
+            claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        except (IndexError, ValueError):
+            return None
+        if not isinstance(claims, dict):
+            return None
+        value = claims.get("oid") or claims.get("sub")
+        return str(value) if value else None
 
     # ------------------------------------------------------------------
     # Login (PKCE flow)
@@ -235,7 +262,7 @@ class ImowAuth:
             )
 
         if str(body.get("status", "200")) != "200":
-            raise ImowAuthError(
+            raise ImowInvalidCredentials(
                 f"Invalid credentials (B2C SelfAsserted rejected): {body.get('message', body)}"
             )
 

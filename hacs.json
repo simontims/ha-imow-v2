@@ -1,5 +1,6 @@
 {
   "name": "STIHL iMow v2",
   "category": "integration",
-  "domain": "imow_v2"
+  "domain": "imow_v2",
+  "homeassistant": "2025.8.0"
 }

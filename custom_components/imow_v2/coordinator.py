@@ -17,13 +17,13 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import ImowApi, ImowApiError
-from .auth import ImowAuth, ImowAuthError, ImowTokenRejected
+from .auth import ImowAuth, ImowAuthError, ImowInvalidCredentials, ImowTokenRejected
 from .const import (
     DOMAIN,
     ERROR_TEXT_LOCALES,
@@ -98,7 +98,6 @@ class ImowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._push_unsub: CALLBACK_TYPE | None = None
         self._history_unsub: dict[str, CALLBACK_TYPE] = {}
         self.signalr = None  # set by __init__.py once created
-        self.options_snapshot: dict[str, Any] = {}
         self._tracking_interval_s = tracking_interval_s
         self._tracking: dict[str, asyncio.Task] = {}
         self.error_texts: dict[str, dict[str, str]] = {}  # code → {headline, description}
@@ -152,6 +151,9 @@ class ImowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         try:
             return await self._fetch_all()
+        except ImowInvalidCredentials as err:
+            # The refresh token was rejected and the stored password no longer works
+            raise ConfigEntryAuthFailed("STIHL rejected the email or password") from err
         except (ImowAuthError, ImowApiError) as err:
             raise UpdateFailed(str(err)) from err
 

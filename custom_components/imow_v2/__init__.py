@@ -7,10 +7,10 @@ import aiohttp
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
-from .auth import ImowAuth, ImowAuthError, ImowTokenRejected
+from .auth import ImowAuth, ImowAuthError, ImowInvalidCredentials, ImowTokenRejected
 from .api import ImowApi
 from .const import DEFAULT_SCAN_INTERVAL, DEFAULT_TRACKING_INTERVAL, DOMAIN
 from .coordinator import ImowCoordinator
@@ -51,6 +51,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 await auth.login(entry.data["username"], entry.data["password"])
         else:
             await auth.login(entry.data["username"], entry.data["password"])
+    except ImowInvalidCredentials as err:
+        # Wrong or changed password: HA shows a "Re-authenticate" prompt
+        await session.close()
+        raise ConfigEntryAuthFailed("STIHL rejected the email or password") from err
     except ImowAuthError as err:
         await session.close()
         raise ConfigEntryNotReady(f"Could not authenticate with STIHL cloud: {err}") from err
@@ -58,6 +62,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await session.close()
         raise ConfigEntryNotReady(f"Network not ready: {err}") from err
     entry.async_on_unload(session.close)
+    _async_migrate_unique_id(hass, entry, auth)
 
     api = ImowApi(session, auth)
     coordinator = ImowCoordinator(
@@ -89,8 +94,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     coordinator.signalr.start(hass)
 
-    coordinator.options_snapshot = dict(entry.options)
-    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
 
 
@@ -113,14 +116,15 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return unload_ok
 
 
-async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload when options change.
-
-    Update listeners also fire when entry.data changes, which happens every
-    time a rotated refresh token is persisted; reloading then would restart
-    everything (and the SignalR connection) every ~15 minutes.
-    """
-    coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-    if coordinator is not None and coordinator.options_snapshot == dict(entry.options):
+def _async_migrate_unique_id(hass: HomeAssistant, entry: ConfigEntry, auth: ImowAuth) -> None:
+    """Entries created before 1.2 used the email address; switch to the STIHL account ID."""
+    account_id = auth.account_id
+    if not account_id or entry.unique_id == account_id:
         return
-    await hass.config_entries.async_reload(entry.entry_id)
+    if any(
+        other.unique_id == account_id
+        for other in hass.config_entries.async_entries(DOMAIN)
+        if other.entry_id != entry.entry_id
+    ):
+        return
+    hass.config_entries.async_update_entry(entry, unique_id=account_id)
