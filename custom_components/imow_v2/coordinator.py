@@ -289,9 +289,15 @@ class ImowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # ------------------------------------------------------------------
 
     def _is_away(self, mower: dict[str, Any]) -> bool:
-        if mower.get("_activity") in _AWAY_CATEGORIES:
+        activity = mower.get("_activity")
+        docked = bool((mower.get("device") or {}).get("isDocked"))
+        # An error or lock on the dock (e.g. a wire fault) isn't worth tracking; out on the lawn
+        # it is. isDocked is only trusted here: it can lag while a job is running.
+        if activity in ("error", "locked"):
+            return not docked
+        if activity in _AWAY_CATEGORIES:
             return True
-        return mower.get("_activity") == "busy" and not (mower.get("device") or {}).get("isDocked")
+        return activity == "busy" and not docked
 
     @callback
     def _update_tracking(self, mower_id: str, data: dict[str, Any] | None = None) -> None:
