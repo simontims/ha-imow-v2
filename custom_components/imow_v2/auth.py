@@ -14,10 +14,8 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse
 import aiohttp
 
 from .const import (
-    APIM_KEY,
     B2C_BASE,
     B2C_CLIENT_ID,
-    B2C_POLICY,
     B2C_POLICY_MIXED,
     B2C_REDIRECT_URI,
     B2C_SCOPE,
@@ -73,17 +71,6 @@ class ImowAuth:
         if not self.access_token or not hasattr(self, "_token_acquired_at"):
             return False
         return (time.monotonic() - self._token_acquired_at) > (self.expires_in - 60)
-
-    def auth_headers(self) -> dict[str, str]:
-        """Return headers required for every API call."""
-        if not self.access_token:
-            raise ImowAuthError("Not authenticated")
-        return {
-            "Authorization": f"Bearer {self.access_token}",
-            "Ocp-Apim-Subscription-Key": APIM_KEY,
-            "Accept": "application/json",
-            "User-Agent": USER_AGENT,
-        }
 
     # ------------------------------------------------------------------
     # Login (PKCE flow)

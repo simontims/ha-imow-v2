@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -14,15 +14,16 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
-    DEGREE,
     PERCENTAGE,
     SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
     EntityCategory,
     UnitOfLength,
     UnitOfTime,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .coordinator import ImowCoordinator
@@ -60,17 +61,6 @@ def event_text(event: dict[str, Any] | None) -> str | None:
     return text or None
 
 
-def _first_error(v: Any) -> Any:
-    if not isinstance(v, list) or not v:
-        return None
-    err = v[0]
-    if isinstance(err, dict):
-        for k in ("errorCode", "code", "errorId", "id", "dtc"):
-            if err.get(k) is not None:
-                return str(err[k])
-        return str(err)[:250]
-    return str(err)
-
 
 @dataclass(frozen=True, kw_only=True)
 class ImowSensorDescription(SensorEntityDescription):
@@ -90,9 +80,6 @@ def _recent_events(mower: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _error_attrs(mower: dict[str, Any]) -> dict[str, Any]:
-    return {"errors": (mower.get("device") or {}).get("errorsActive") or []}
-
 
 DIAG = EntityCategory.DIAGNOSTIC
 
@@ -107,20 +94,11 @@ SENSOR_DESCRIPTIONS: tuple[ImowSensorDescription, ...] = (
     ),
     ImowSensorDescription(
         key="overall_state", name="Overall State", icon="mdi:robot-mower",
-        value_path=("device", "overallState", "state"),
+        entity_category=DIAG, value_path=("device", "overallState", "state"),
     ),
     ImowSensorDescription(
         key="job_state", name="Job State", icon="mdi:state-machine",
         value_path=("job", "state"),
-    ),
-    ImowSensorDescription(
-        key="state_trigger", name="State Trigger", icon="mdi:message-text",
-        entity_category=DIAG, value_path=("device", "overallState", "trigger"),
-    ),
-    ImowSensorDescription(
-        key="machine_error", name="Error Code", icon="mdi:alert-circle-outline",
-        value_path=("device", "errorsActive"), transform=_first_error,
-        attrs=_error_attrs,
     ),
     ImowSensorDescription(
         key="last_event", name="Last Event", icon="mdi:history",
@@ -160,21 +138,7 @@ SENSOR_DESCRIPTIONS: tuple[ImowSensorDescription, ...] = (
         device_class=SensorDeviceClass.TIMESTAMP, icon="mdi:battery-clock",
         value_path=("battery", "stateEvent", "forecastedEventTime"), transform=_parse_dt,
     ),
-    ImowSensorDescription(
-        key="battery_endurance", name="Battery Endurance",
-        device_class=SensorDeviceClass.DURATION, native_unit_of_measurement=UnitOfTime.MINUTES,
-        entity_category=DIAG, value_path=("battery", "endurance"),
-        transform=lambda v: round(int(v) / 60),
-    ),
     # ── GPS ─────────────────────────────────────────────────────────────
-    ImowSensorDescription(
-        key="gps_latitude", name="GPS Latitude", icon="mdi:latitude",
-        entity_category=DIAG, value_path=("_settings", "location", "latitude"),
-    ),
-    ImowSensorDescription(
-        key="gps_longitude", name="GPS Longitude", icon="mdi:longitude",
-        entity_category=DIAG, value_path=("_settings", "location", "longitude"),
-    ),
     ImowSensorDescription(
         key="gps_accuracy", name="GPS Accuracy", icon="mdi:crosshairs-gps",
         native_unit_of_measurement=UnitOfLength.METERS, entity_category=DIAG,
@@ -186,11 +150,6 @@ SENSOR_DESCRIPTIONS: tuple[ImowSensorDescription, ...] = (
         entity_category=DIAG, value_path=("_settings", "location", "lastUpdated"),
         transform=_parse_dt,
     ),
-    ImowSensorDescription(
-        key="heading", name="Heading", icon="mdi:compass-outline",
-        native_unit_of_measurement=DEGREE, entity_category=DIAG,
-        value_path=("_settings", "courseAngle"),
-    ),
     # ── Job times ───────────────────────────────────────────────────────
     ImowSensorDescription(
         key="job_start_time", name="Job Start Time",
@@ -201,11 +160,6 @@ SENSOR_DESCRIPTIONS: tuple[ImowSensorDescription, ...] = (
         key="job_end_time", name="Job End Time",
         device_class=SensorDeviceClass.TIMESTAMP, icon="mdi:clock-end",
         value_path=("job", "endTime"), transform=_parse_dt,
-    ),
-    ImowSensorDescription(
-        key="next_start", name="Next Scheduled Start",
-        device_class=SensorDeviceClass.TIMESTAMP, icon="mdi:calendar-clock",
-        value_path=("_nextStart",), transform=_parse_dt,
     ),
     ImowSensorDescription(
         key="last_seen", name="Last Seen", device_class=SensorDeviceClass.TIMESTAMP,
@@ -239,24 +193,6 @@ SENSOR_DESCRIPTIONS: tuple[ImowSensorDescription, ...] = (
         transform=lambda v: " ".join(
             x for x in (v.get("providerId"), v.get("connectionType")) if x
         ) or None,
-    ),
-    # ── Device info ─────────────────────────────────────────────────────
-    ImowSensorDescription(
-        key="model", name="Model", icon="mdi:robot-mower", entity_category=DIAG,
-        value_path=("device", "type"),
-    ),
-    ImowSensorDescription(
-        key="timezone", name="Time Zone", icon="mdi:map-clock-outline",
-        entity_category=DIAG, value_path=("device", "deviceTimeZone"),
-    ),
-    ImowSensorDescription(
-        key="firmware", name="Firmware", icon="mdi:information-outline",
-        entity_category=DIAG,
-        value_path=("setting", "deviceSoftwarePackageVersionInstalled"),
-    ),
-    ImowSensorDescription(
-        key="nickname", name="Nickname", icon="mdi:tag", entity_category=DIAG,
-        value_path=("setting", "deviceNickname"),
     ),
     # ── Statistics ──────────────────────────────────────────────────────
     ImowSensorDescription(
@@ -293,11 +229,13 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: ImowCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
+    entities: list[SensorEntity] = [
         ImowSensor(coordinator, mower_id, desc)
         for mower_id in coordinator.data
         for desc in SENSOR_DESCRIPTIONS
-    )
+    ]
+    entities += [ImowTimeRemainingSensor(coordinator, mower_id) for mower_id in coordinator.data]
+    async_add_entities(entities)
 
 
 class ImowSensor(ImowEntity, SensorEntity):
@@ -328,3 +266,37 @@ class ImowSensor(ImowEntity, SensorEntity):
         if self.entity_description.attrs:
             return self.entity_description.attrs(self.mower)
         return None
+
+
+class ImowTimeRemainingSensor(ImowEntity, SensorEntity):
+    """Minutes until the running job's end time (includes the drive home)."""
+
+    _attr_name = "Time Remaining"
+    _attr_icon = "mdi:timer-sand"
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
+
+    def __init__(self, coordinator: ImowCoordinator, mower_id: str) -> None:
+        super().__init__(coordinator, mower_id, "time_remaining")
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        # The end time is fixed, so count down between coordinator updates
+        self.async_on_remove(
+            async_track_time_interval(self.hass, self._tick, timedelta(minutes=1))
+        )
+
+    @callback
+    def _tick(self, _now) -> None:
+        if self.native_value is not None or self.state not in (None, "unknown"):
+            self.async_write_ha_state()
+
+    @property
+    def native_value(self) -> int | None:
+        job = self.mower.get("job") or {}
+        if not job.get("state", "").endswith("JobRunning"):
+            return None
+        end = _parse_dt(job.get("endTime"))
+        if end is None:
+            return None
+        return max(0, round((end - dt_util.utcnow()).total_seconds() / 60))

@@ -100,7 +100,6 @@ class ImowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.options_snapshot: dict[str, Any] = {}
         self._tracking_interval_s = tracking_interval_s
         self._tracking: dict[str, asyncio.Task] = {}
-        self.mowers: dict[str, dict[str, Any]] = {}
 
     # ------------------------------------------------------------------
     # Authentication
@@ -199,7 +198,6 @@ class ImowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._derive(merged, mower_id)
             result[mower_id] = merged
 
-        self.mowers = result
         for mower_id in result:
             self._update_tracking(mower_id, result)
         return result
@@ -342,9 +340,17 @@ class ImowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self, mower_id: str, command: str, payload: dict | None = None
     ) -> None:
         try:
-            await self._call(self._api.send_command, mower_id, command, payload)
+            reply = await self._call(self._api.send_command, mower_id, command, payload)
         except (ImowAuthError, ImowApiError) as err:
             raise HomeAssistantError(f"iMow command '{command}' failed: {err}") from err
+        # 201 replies say whether the cloud reached the mower; 204 (force) has no body
+        if isinstance(reply, dict) and reply.get("commandExecutionState") not in (
+            None, "commandDelivered"
+        ):
+            raise HomeAssistantError(
+                f"iMow command '{command}' not delivered to the mower: "
+                f"{reply.get('commandExecutionState')}"
+            )
         _LOGGER.info("iMow command '%s' sent to mower %s", command, mower_id)
         if not (self.signalr and self.signalr.connected):
             await self.async_request_refresh()
