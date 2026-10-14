@@ -110,6 +110,10 @@ SENSOR_DESCRIPTIONS: tuple[ImowSensorDescription, ...] = (
         value_path=("_lastEvent", "dateTime"), transform=_parse_dt,
     ),
     ImowSensorDescription(
+        key="job_zone", name="Job Zone", icon="mdi:map-marker-path",
+        value_path=("_jobZone",),
+    ),
+    ImowSensorDescription(
         key="area", name="Current Area", icon="mdi:map-marker-radius",
         value_path=("device", "currentArea"),
     ),

@@ -396,6 +396,16 @@ class ImowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 except ValueError:
                     pass
         mower["_nextStart"] = job.get("startTime")
+        # Zone of the running manual job, by name ("Back"), from the mowing plan
+        mower["_jobZone"] = None
+        if str(job.get("state") or "").endswith("JobRunning"):
+            manual = (mower.get("_plan") or {}).get("mowingPlanManualJob") or {}
+            zone_id = manual.get("mowingZoneId")
+            zones = (mower.get("setting") or {}).get("mowingZones") or []
+            mower["_jobZone"] = next(
+                (z.get("name") for z in zones if z.get("mowingZoneId") == zone_id),
+                None if zone_id is None else f"Zone {zone_id}",
+            )
         mower["_activity"] = overall_category(
             (device.get("overallState") or {}).get("state")
         )
