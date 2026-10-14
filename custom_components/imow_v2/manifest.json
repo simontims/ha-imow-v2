@@ -2,11 +2,11 @@
   "domain": "imow_v2",
   "name": "STIHL iMow v2 (Gen5+)",
   "version": "1.2.0",
-  "documentation": "https://github.com/aquarius72/ha-imow-v2",
-  "issue_tracker": "https://github.com/aquarius72/ha-imow-v2/issues",
+  "documentation": "https://github.com/simontims/ha-imow-v2",
+  "issue_tracker": "https://github.com/simontims/ha-imow-v2/issues",
   "config_flow": true,
   "codeowners": [
-    "@aquarius72"
+    "@simontims"
   ],
   "iot_class": "cloud_push",
   "integration_type": "hub",

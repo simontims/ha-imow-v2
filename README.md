@@ -35,7 +35,7 @@ Other Gen5+ models should work but are untested.
 
 1. Open HACS in your Home Assistant instance.
 2. Go to **Integrations → Custom repositories**.
-3. Add this repository as an **Integration**.
+3. Add `https://github.com/simontims/ha-imow-v2` as an **Integration**.
 4. Search for **STIHL iMow v2** and click **Install**.
 5. Restart Home Assistant.
 
@@ -162,8 +162,15 @@ This is an unofficial integration. It is not made, endorsed or supported by STIH
 
 ## Credits
 
-Authentication and API reverse-engineering based on the excellent work of **TA2k** in [ioBroker.iMow](https://github.com/TA2k/ioBroker.iMow).
-Modifications and Python port by [aquarius72](https://github.com/aquarius72).
+This is a fork of [aquarius72/ha-imow-v2](https://github.com/aquarius72/ha-imow-v2), which did the hard part of getting Home Assistant signed in to STIHL's Gen5+ cloud. Thank you!
+
+- Authentication and API reverse-engineering based on the work of **TA2k** in [ioBroker.iMow](https://github.com/TA2k/ioBroker.iMow).
+- Original Python port by [aquarius72](https://github.com/aquarius72).
+- This fork by [simontims](https://github.com/simontims): moved to the API the myimow web app uses (live updates, GPS, correct commands), STIHL's error texts, job zone and time remaining, re-authentication, reconfigure, diagnostics and tests.
+
+### Coming from aquarius72/ha-imow-v2?
+
+This fork keeps the same integration domain (`imow_v2`), so it replaces the original in place: remove the old custom repository from HACS, add this one, install, and restart. Your existing setup and entities stay. Some entities were renamed or removed in the rework, so check dashboards and automations afterwards.
 
 ## License
 
