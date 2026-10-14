@@ -1,6 +1,7 @@
 DOMAIN = "imow_v2"
 MANUFACTURER = "STIHL"
 DEFAULT_SCAN_INTERVAL = 10  # minutes
+DEFAULT_TRACKING_INTERVAL = 60  # seconds between GPS fixes while away from the dock; 0 = off
 
 # Azure B2C PKCE constants (accepted by STIHL B2C); the verifier/challenge pair
 # is generated fresh for every login in auth.py
@@ -47,16 +48,20 @@ OVERALL_STATE_GROUPS = {
     },
     "charging": {"charging", "chargingBatteryWithJob", "chargingNoJob", "chargingRainWithJob"},
     "returning": {"drivingHome", "drivingHomeBattery", "drivingHomeMowplan", "drivingHomeRain"},
-    "driving": {"drivingToZone", "learningStartingPoints", "completingLearningStartingPoints"},
+    "driving": {
+        "drivingToZone", "learningStartingPoints", "completingLearningStartingPoints",
+        "pausedOrIdlePrepareMowing",  # just left the dock, about to drive to the zone
+    },
     "mowing": {"mowing"},
     "paused": {
-        "pausedOrIdle", "pausedOrIdlePrepareMowing", "parkedInSideArea",
+        "pausedOrIdle", "parkedInSideArea",
         "parkedInSideAreaBattery", "parkedInSideAreaMowplan", "parkedInSideAreaRain",
     },
     "error": {"error", "invalid", "blockedLearningStartingPoints", "selfTesting", "stopped"},
     "locked": {"beingCarried", "locked", "outsideGeofence"},
     "offline": {"offline", "resettingSecretData"},
     "sleeping": {"sleeping"},
+    "busy": {"internalWorkInProgress"},  # e.g. a few seconds after a start command
 }
 
 USER_AGENT = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"

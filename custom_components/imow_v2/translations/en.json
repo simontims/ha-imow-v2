@@ -24,7 +24,8 @@
       "init": {
         "title": "iMow Options",
         "data": {
-          "scan_interval": "Poll interval (minutes)"
+          "scan_interval": "Poll interval (minutes)",
+          "tracking_interval": "GPS tracking interval while mowing (seconds, 0 = off)"
         }
       }
     }

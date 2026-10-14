@@ -38,6 +38,8 @@ _LOGGER = logging.getLogger(__name__)
 _HISTORY_KEEP = 25          # events kept in memory / exposed as attributes
 _PUSH_DEBOUNCE_S = 1.0      # SignalR bursts arrive as dozens of tiny messages
 _FORCE_SETTLE_S = 6         # cloud twin lag after force-status-update (no SignalR)
+# Categories in which the mower is out on the lawn and worth tracking
+_AWAY_CATEGORIES = frozenset({"mowing", "driving", "returning", "paused", "error", "locked"})
 
 
 def _deep_merge(target: dict, patch: dict) -> None:
@@ -49,6 +51,9 @@ def _deep_merge(target: dict, patch: dict) -> None:
             target[key] = copy.deepcopy(value)
 
 
+_UNKNOWN_STATES_LOGGED: set[str] = set()
+
+
 def overall_category(state: str | None) -> str | None:
     """Group a raw overallState into the categories the myimow app uses."""
     if not state:
@@ -56,6 +61,9 @@ def overall_category(state: str | None) -> str | None:
     for category, members in OVERALL_STATE_GROUPS.items():
         if state in members:
             return category
+    if state not in _UNKNOWN_STATES_LOGGED:
+        _UNKNOWN_STATES_LOGGED.add(state)
+        _LOGGER.info("Unmapped iMow overallState '%s'; please report it", state)
     return None
 
 
@@ -68,6 +76,7 @@ class ImowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         auth: ImowAuth,
         api: ImowApi,
         scan_interval_minutes: int,
+        tracking_interval_s: int,
         username: str,
         password: str,
         entry: ConfigEntry,
@@ -89,6 +98,8 @@ class ImowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._history_unsub: dict[str, CALLBACK_TYPE] = {}
         self.signalr = None  # set by __init__.py once created
         self.options_snapshot: dict[str, Any] = {}
+        self._tracking_interval_s = tracking_interval_s
+        self._tracking: dict[str, asyncio.Task] = {}
         self.mowers: dict[str, dict[str, Any]] = {}
 
     # ------------------------------------------------------------------
@@ -189,6 +200,8 @@ class ImowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             result[mower_id] = merged
 
         self.mowers = result
+        for mower_id in result:
+            self._update_tracking(mower_id, result)
         return result
 
     # ------------------------------------------------------------------
@@ -221,6 +234,7 @@ class ImowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug("Ignoring SignalR target %s", target)
             return
         self._derive(mower, mower_id)
+        self._update_tracking(mower_id)
         # Not async_set_updated_data(): that would keep postponing the poll
         if self._push_unsub is None:
             self._push_unsub = async_call_later(
@@ -251,6 +265,55 @@ class ImowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._derive(mower, mower_id)
             self.async_update_listeners()
 
+    # ------------------------------------------------------------------
+    # GPS tracking while away from the dock
+    # ------------------------------------------------------------------
+
+    def _is_away(self, mower: dict[str, Any]) -> bool:
+        if mower.get("_activity") in _AWAY_CATEGORIES:
+            return True
+        return mower.get("_activity") == "busy" and not (mower.get("device") or {}).get("isDocked")
+
+    @callback
+    def _update_tracking(self, mower_id: str, data: dict[str, Any] | None = None) -> None:
+        """Start a tracking loop when the mower leaves the dock.
+
+        The mower only uploads its GPS position in reply to force-status-update,
+        and the position is never pushed over SignalR, so it has to be polled.
+        """
+        mower = (data or self.data or {}).get(mower_id) or {}
+        if self._tracking_interval_s <= 0 or mower_id in self._tracking:
+            return
+        if self._is_away(mower):
+            self._tracking[mower_id] = self.config_entry.async_create_background_task(
+                self.hass, self._async_track(mower_id), f"imow_v2 tracking {mower_id}"
+            )
+
+    async def _async_track(self, mower_id: str) -> None:
+        _LOGGER.info("Mower away from dock: GPS tracking every %ss", self._tracking_interval_s)
+        try:
+            # Check at the end of each round: when started from a poll, self.data
+            # does not hold that poll's result yet
+            while True:
+                try:
+                    await self._call(self._api.force_status_update, mower_id)
+                    await asyncio.sleep(_FORCE_SETTLE_S)
+                    settings = await self._call(self._api.get_mower_settings, mower_id)
+                except (ImowAuthError, ImowApiError) as err:
+                    _LOGGER.debug("GPS tracking poll failed: %s", err)
+                else:
+                    mower = (self.data or {}).get(mower_id)
+                    if mower is not None and settings:
+                        mower["_settings"] = settings
+                        self._derive(mower, mower_id)
+                        self.async_update_listeners()
+                await asyncio.sleep(max(self._tracking_interval_s - _FORCE_SETTLE_S, 5))
+                if not self._is_away((self.data or {}).get(mower_id) or {}):
+                    break
+        finally:
+            self._tracking.pop(mower_id, None)
+            _LOGGER.info("GPS tracking stopped")
+
     @callback
     def async_cancel_timers(self) -> None:
         if self._push_unsub:
@@ -259,6 +322,9 @@ class ImowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for unsub in self._history_unsub.values():
             unsub()
         self._history_unsub.clear()
+        for task in self._tracking.values():
+            task.cancel()
+        self._tracking.clear()
 
     async def async_on_signalr_connect(self) -> None:
         """After (re)connecting, request a burst so nothing missed stays stale."""

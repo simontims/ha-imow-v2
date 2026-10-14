@@ -13,7 +13,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import TextSelector, TextSelectorConfig, TextSelectorType
 
 from .auth import ImowAuth, ImowAuthError
-from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
+from .const import DEFAULT_SCAN_INTERVAL, DEFAULT_TRACKING_INTERVAL, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -95,6 +95,12 @@ class ImowOptionsFlow(OptionsFlow):
                     "scan_interval",
                     default=self._entry.options.get("scan_interval", DEFAULT_SCAN_INTERVAL),
                 ): vol.All(int, vol.Range(min=1, max=60)),
+                vol.Optional(
+                    "tracking_interval",
+                    default=self._entry.options.get(
+                        "tracking_interval", DEFAULT_TRACKING_INTERVAL
+                    ),
+                ): vol.All(int, vol.Range(min=0, max=600)),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)

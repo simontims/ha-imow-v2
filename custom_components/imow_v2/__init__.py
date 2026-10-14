@@ -8,11 +8,11 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .auth import ImowAuth, ImowAuthError, ImowTokenRejected
 from .api import ImowApi
-from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
+from .const import DEFAULT_SCAN_INTERVAL, DEFAULT_TRACKING_INTERVAL, DOMAIN
 from .coordinator import ImowCoordinator
 from .services import async_setup_services
 from .signalr import ImowSignalR
@@ -31,7 +31,12 @@ PLATFORMS: list[Platform] = [
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up iMow from a config entry."""
-    session = async_get_clientsession(hass)
+    # Own session without a cookie jar: STIHL's B2C token endpoint sets cookies,
+    # and when they are sent back it answers a refresh with an HTML page instead
+    # of tokens, so every refresh after the first failed with a shared session
+    session = async_create_clientsession(
+        hass, auto_cleanup=False, cookie_jar=aiohttp.DummyCookieJar()
+    )
     auth = ImowAuth(session)
 
     # Restore tokens from stored data; only log in with the password when STIHL
@@ -47,9 +52,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         else:
             await auth.login(entry.data["username"], entry.data["password"])
     except ImowAuthError as err:
+        await session.close()
         raise ConfigEntryNotReady(f"Could not authenticate with STIHL cloud: {err}") from err
     except aiohttp.ClientError as err:
+        await session.close()
         raise ConfigEntryNotReady(f"Network not ready: {err}") from err
+    entry.async_on_unload(session.close)
 
     api = ImowApi(session, auth)
     coordinator = ImowCoordinator(
@@ -57,6 +65,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         auth,
         api,
         entry.options.get("scan_interval", DEFAULT_SCAN_INTERVAL),
+        entry.options.get("tracking_interval", DEFAULT_TRACKING_INTERVAL),
         entry.data["username"],
         entry.data["password"],
         entry,

@@ -51,7 +51,12 @@ class ImowLawnMower(ImowEntity, LawnMowerEntity):
 
     @property
     def activity(self) -> LawnMowerActivity | None:
-        return _ACTIVITY.get(self.mower.get("_activity"))
+        category = self.mower.get("_activity")
+        if category == "busy":
+            # Short internal work; report where the mower physically is
+            docked = (self.mower.get("device") or {}).get("isDocked")
+            return LawnMowerActivity.DOCKED if docked else LawnMowerActivity.MOWING
+        return _ACTIVITY.get(category)
 
     async def async_start_mowing(self) -> None:
         """Resume a paused job, otherwise start a manual job."""

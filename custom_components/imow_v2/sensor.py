@@ -102,7 +102,7 @@ SENSOR_DESCRIPTIONS: tuple[ImowSensorDescription, ...] = (
         key="activity", name="Activity", icon="mdi:robot-mower",
         device_class=SensorDeviceClass.ENUM,
         options=["docked", "charging", "returning", "driving", "mowing", "paused",
-                 "error", "locked", "offline", "sleeping"],
+                 "error", "locked", "offline", "sleeping", "busy"],
         value_path=("_activity",),
     ),
     ImowSensorDescription(
