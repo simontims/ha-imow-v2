@@ -21,11 +21,11 @@ class ImowButtonDescription(ButtonEntityDescription):
 
 BUTTONS: tuple[ImowButtonDescription, ...] = (
     ImowButtonDescription(
-        key="refresh_status", name="Refresh Status", icon="mdi:refresh",
+        key="refresh_status", translation_key="refresh_status", icon="mdi:refresh",
         entity_category=EntityCategory.DIAGNOSTIC, command=CMD_FORCE_UPDATE,
     ),
     ImowButtonDescription(
-        key="clear_errors", name="Clear Errors", icon="mdi:alert-remove-outline",
+        key="clear_errors", translation_key="clear_errors", icon="mdi:alert-remove-outline",
         command=CMD_CLEAR_ERRORS,
     ),
 )

@@ -90,5 +90,137 @@
         }
       }
     }
+  },
+  "entity": {
+    "binary_sensor": {
+      "is_raining": {
+        "name": "Rain Sensor"
+      },
+      "online": {
+        "name": "Online"
+      },
+      "docked": {
+        "name": "Docked"
+      },
+      "problem": {
+        "name": "Error"
+      },
+      "service_required": {
+        "name": "Service Required"
+      },
+      "mowing_plan_active": {
+        "name": "Mowing Plan Active"
+      },
+      "wifi_connected": {
+        "name": "Wi-Fi Connected"
+      },
+      "cellular_connected": {
+        "name": "Cellular Connected"
+      },
+      "software_update": {
+        "name": "Software Update Available"
+      }
+    },
+    "button": {
+      "refresh_status": {
+        "name": "Refresh Status"
+      },
+      "clear_errors": {
+        "name": "Clear Errors"
+      }
+    },
+    "device_tracker": {
+      "location": {
+        "name": "Location"
+      }
+    },
+    "number": {
+      "default_mowing_duration": {
+        "name": "Default Mowing Duration"
+      }
+    },
+    "sensor": {
+      "activity": {
+        "name": "Activity"
+      },
+      "overall_state": {
+        "name": "Overall State"
+      },
+      "job_state": {
+        "name": "Job State"
+      },
+      "last_event": {
+        "name": "Last Event"
+      },
+      "last_event_time": {
+        "name": "Last Event Time"
+      },
+      "job_zone": {
+        "name": "Job Zone"
+      },
+      "area": {
+        "name": "Current Area"
+      },
+      "advice": {
+        "name": "Advice"
+      },
+      "battery": {
+        "name": "Battery"
+      },
+      "charge_sufficient_for": {
+        "name": "Charge Sufficient For"
+      },
+      "battery_next_state": {
+        "name": "Battery Next State"
+      },
+      "battery_next_state_time": {
+        "name": "Battery Next State Time"
+      },
+      "gps_accuracy": {
+        "name": "GPS Accuracy"
+      },
+      "gps_updated": {
+        "name": "GPS Updated"
+      },
+      "job_start_time": {
+        "name": "Job Start Time"
+      },
+      "job_end_time": {
+        "name": "Job End Time"
+      },
+      "last_seen": {
+        "name": "Last Seen"
+      },
+      "cutting_height": {
+        "name": "Cutting Height"
+      },
+      "wifi_signal": {
+        "name": "Wi-Fi Signal"
+      },
+      "cellular_signal": {
+        "name": "Cellular Signal"
+      },
+      "cellular_network": {
+        "name": "Cellular Network"
+      },
+      "stat_total_operating_time": {
+        "name": "Total Operating Time"
+      },
+      "stat_total_distance": {
+        "name": "Total Distance"
+      },
+      "stat_blade_time": {
+        "name": "Blade Operating Time"
+      },
+      "stat_total_jobs": {
+        "name": "Total Mowing Jobs"
+      },
+      "time_remaining": {
+        "name": "Time Remaining"
+      },
+      "error_message": {
+        "name": "Error Message"
+      }
+    }
   }
 }

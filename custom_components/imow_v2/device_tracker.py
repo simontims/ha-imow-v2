@@ -25,7 +25,7 @@ async def async_setup_entry(
 class ImowTrackerEntity(ImowEntity, TrackerEntity):
     """The mower's GPS position, from mower-settings → location."""
 
-    _attr_name = "Location"
+    _attr_translation_key = "location"
     _attr_icon = "mdi:robot-mower"
     _attr_source_type = SourceType.GPS
 

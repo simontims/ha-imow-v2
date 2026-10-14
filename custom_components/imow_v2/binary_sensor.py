@@ -31,47 +31,47 @@ DIAG = EntityCategory.DIAGNOSTIC
 
 BINARY_SENSOR_DESCRIPTIONS: tuple[ImowBinarySensorDescription, ...] = (
     ImowBinarySensorDescription(
-        key="is_raining", name="Rain Sensor",
+        key="is_raining", translation_key="is_raining",
         device_class=BinarySensorDeviceClass.MOISTURE,
         value_path=("sensor", "sensorIsRaining"),
     ),
     ImowBinarySensorDescription(
-        key="online", name="Online",
+        key="online", translation_key="online",
         device_class=BinarySensorDeviceClass.CONNECTIVITY,
         value_path=("device", "isCurrentlyConnected"),
     ),
     ImowBinarySensorDescription(
-        key="docked", name="Docked", icon="mdi:home",
+        key="docked", translation_key="docked", icon="mdi:home",
         value_path=("device", "isDocked"),
     ),
     ImowBinarySensorDescription(
-        key="problem", name="Error",
+        key="problem", translation_key="problem",
         device_class=BinarySensorDeviceClass.PROBLEM,
         value_path=("device", "errorsActive"),
         attrs_path=("device", "errorsActive"),
     ),
     ImowBinarySensorDescription(
-        key="service_required", name="Service Required",
+        key="service_required", translation_key="service_required",
         device_class=BinarySensorDeviceClass.PROBLEM, icon="mdi:wrench-clock",
         value_path=("device", "servicesRequired"),
         attrs_path=("device", "servicesRequired"),
     ),
     ImowBinarySensorDescription(
-        key="mowing_plan_active", name="Mowing Plan Active", icon="mdi:calendar-check",
+        key="mowing_plan_active", translation_key="mowing_plan_active", icon="mdi:calendar-check",
         value_path=("mowingPlan", "isMowingPlanActive"),
     ),
     ImowBinarySensorDescription(
-        key="wifi_connected", name="Wi-Fi Connected", icon="mdi:wifi",
+        key="wifi_connected", translation_key="wifi_connected", icon="mdi:wifi",
         device_class=BinarySensorDeviceClass.CONNECTIVITY, entity_category=DIAG,
         value_path=("wifiIsConnected",),
     ),
     ImowBinarySensorDescription(
-        key="cellular_connected", name="Cellular Connected", icon="mdi:signal",
+        key="cellular_connected", translation_key="cellular_connected", icon="mdi:signal",
         device_class=BinarySensorDeviceClass.CONNECTIVITY, entity_category=DIAG,
         value_path=("cellularIsConnected",),
     ),
     ImowBinarySensorDescription(
-        key="software_update", name="Software Update Available",
+        key="software_update", translation_key="software_update",
         device_class=BinarySensorDeviceClass.UPDATE, entity_category=DIAG,
         value_path=("device", "isSoftwareUpdateAvailableForInstallation"),
     ),

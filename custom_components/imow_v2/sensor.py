@@ -86,112 +86,112 @@ DIAG = EntityCategory.DIAGNOSTIC
 SENSOR_DESCRIPTIONS: tuple[ImowSensorDescription, ...] = (
     # ── Status ──────────────────────────────────────────────────────────
     ImowSensorDescription(
-        key="activity", name="Activity", icon="mdi:robot-mower",
+        key="activity", translation_key="activity", icon="mdi:robot-mower",
         device_class=SensorDeviceClass.ENUM,
         options=["docked", "charging", "returning", "driving", "mowing", "paused",
                  "error", "locked", "offline", "sleeping", "busy"],
         value_path=("_activity",),
     ),
     ImowSensorDescription(
-        key="overall_state", name="Overall State", icon="mdi:robot-mower",
+        key="overall_state", translation_key="overall_state", icon="mdi:robot-mower",
         entity_category=DIAG, value_path=("device", "overallState", "state"),
     ),
     ImowSensorDescription(
-        key="job_state", name="Job State", icon="mdi:state-machine",
+        key="job_state", translation_key="job_state", icon="mdi:state-machine",
         value_path=("job", "state"),
     ),
     ImowSensorDescription(
-        key="last_event", name="Last Event", icon="mdi:history",
+        key="last_event", translation_key="last_event", icon="mdi:history",
         value_path=("_lastEvent",), transform=event_text, attrs=_recent_events,
     ),
     ImowSensorDescription(
-        key="last_event_time", name="Last Event Time",
+        key="last_event_time", translation_key="last_event_time",
         device_class=SensorDeviceClass.TIMESTAMP, icon="mdi:history",
         value_path=("_lastEvent", "dateTime"), transform=_parse_dt,
     ),
     ImowSensorDescription(
-        key="job_zone", name="Job Zone", icon="mdi:map-marker-path",
+        key="job_zone", translation_key="job_zone", icon="mdi:map-marker-path",
         value_path=("_jobZone",),
     ),
     ImowSensorDescription(
-        key="area", name="Current Area", icon="mdi:map-marker-radius",
+        key="area", translation_key="area", icon="mdi:map-marker-radius",
         value_path=("device", "currentArea"),
     ),
     ImowSensorDescription(
-        key="advice", name="Advice", icon="mdi:lightbulb-on-outline",
+        key="advice", translation_key="advice", icon="mdi:lightbulb-on-outline",
         value_path=("_advices",),
         transform=lambda v: ", ".join(a.get("type", "?") for a in v) if v else "none",
     ),
     # ── Battery ─────────────────────────────────────────────────────────
     ImowSensorDescription(
-        key="battery", name="Battery", device_class=SensorDeviceClass.BATTERY,
+        key="battery", translation_key="battery", device_class=SensorDeviceClass.BATTERY,
         state_class=SensorStateClass.MEASUREMENT, native_unit_of_measurement=PERCENTAGE,
         value_path=("battery", "level"),
         transform=lambda v: round(float(v) * 100),
     ),
     ImowSensorDescription(
-        key="charge_sufficient_for", name="Charge Sufficient For",
+        key="charge_sufficient_for", translation_key="charge_sufficient_for",
         icon="mdi:battery-check", value_path=("battery", "sufficientlyChargedForOperation"),
     ),
     ImowSensorDescription(
-        key="battery_next_state", name="Battery Next State", icon="mdi:battery-clock",
+        key="battery_next_state", translation_key="battery_next_state", icon="mdi:battery-clock",
         value_path=("battery", "stateEvent", "nextState"),
     ),
     ImowSensorDescription(
-        key="battery_next_state_time", name="Battery Next State Time",
+        key="battery_next_state_time", translation_key="battery_next_state_time",
         device_class=SensorDeviceClass.TIMESTAMP, icon="mdi:battery-clock",
         value_path=("battery", "stateEvent", "forecastedEventTime"), transform=_parse_dt,
     ),
     # ── GPS ─────────────────────────────────────────────────────────────
     ImowSensorDescription(
-        key="gps_accuracy", name="GPS Accuracy", icon="mdi:crosshairs-gps",
+        key="gps_accuracy", translation_key="gps_accuracy", icon="mdi:crosshairs-gps",
         native_unit_of_measurement=UnitOfLength.METERS, entity_category=DIAG,
         device_class=SensorDeviceClass.DISTANCE, state_class=SensorStateClass.MEASUREMENT,
         value_path=("_settings", "location", "accuracy"), transform=lambda v: round(float(v), 1),
     ),
     ImowSensorDescription(
-        key="gps_updated", name="GPS Updated", device_class=SensorDeviceClass.TIMESTAMP,
+        key="gps_updated", translation_key="gps_updated", device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=DIAG, value_path=("_settings", "location", "lastUpdated"),
         transform=_parse_dt,
     ),
     # ── Job times ───────────────────────────────────────────────────────
     ImowSensorDescription(
-        key="job_start_time", name="Job Start Time",
+        key="job_start_time", translation_key="job_start_time",
         device_class=SensorDeviceClass.TIMESTAMP, icon="mdi:clock-start",
         value_path=("job", "startTime"), transform=_parse_dt,
     ),
     ImowSensorDescription(
-        key="job_end_time", name="Job End Time",
+        key="job_end_time", translation_key="job_end_time",
         device_class=SensorDeviceClass.TIMESTAMP, icon="mdi:clock-end",
         value_path=("job", "endTime"), transform=_parse_dt,
     ),
     ImowSensorDescription(
-        key="last_seen", name="Last Seen", device_class=SensorDeviceClass.TIMESTAMP,
+        key="last_seen", translation_key="last_seen", device_class=SensorDeviceClass.TIMESTAMP,
         icon="mdi:clock-check", value_path=("device", "lastConnectionStateUpdate"),
         transform=_parse_dt,
     ),
     # ── Settings ────────────────────────────────────────────────────────
     ImowSensorDescription(
-        key="cutting_height", name="Cutting Height", icon="mdi:grass",
+        key="cutting_height", translation_key="cutting_height", icon="mdi:grass",
         native_unit_of_measurement=UnitOfLength.MILLIMETERS,
         device_class=SensorDeviceClass.DISTANCE,
         value_path=("_settings", "cuttingHeight"), transform=lambda v: round(float(v) * 1000),
     ),
     # ── Connectivity ────────────────────────────────────────────────────
     ImowSensorDescription(
-        key="wifi_signal", name="Wi-Fi Signal",
+        key="wifi_signal", translation_key="wifi_signal",
         device_class=SensorDeviceClass.SIGNAL_STRENGTH,
         native_unit_of_measurement=SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
         state_class=SensorStateClass.MEASUREMENT, entity_category=DIAG,
         value_path=("_settings", "wifiNetworkInformation", "currentSignalStrength"),
     ),
     ImowSensorDescription(
-        key="cellular_signal", name="Cellular Signal", icon="mdi:signal",
+        key="cellular_signal", translation_key="cellular_signal", icon="mdi:signal",
         state_class=SensorStateClass.MEASUREMENT, entity_category=DIAG,
         value_path=("_settings", "cellularNetworkInformation", "currentSignalStrength"),
     ),
     ImowSensorDescription(
-        key="cellular_network", name="Cellular Network", icon="mdi:sim",
+        key="cellular_network", translation_key="cellular_network", icon="mdi:sim",
         entity_category=DIAG,
         value_path=("_settings", "cellularNetworkInformation"),
         transform=lambda v: " ".join(
@@ -200,13 +200,13 @@ SENSOR_DESCRIPTIONS: tuple[ImowSensorDescription, ...] = (
     ),
     # ── Statistics ──────────────────────────────────────────────────────
     ImowSensorDescription(
-        key="stat_total_operating_time", name="Total Operating Time",
+        key="stat_total_operating_time", translation_key="stat_total_operating_time",
         device_class=SensorDeviceClass.DURATION, native_unit_of_measurement=UnitOfTime.HOURS,
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_path=("statistics", "totalWorkingSeconds"), transform=_hours,
     ),
     ImowSensorDescription(
-        key="stat_total_distance", name="Total Distance",
+        key="stat_total_distance", translation_key="stat_total_distance",
         device_class=SensorDeviceClass.DISTANCE,
         native_unit_of_measurement=UnitOfLength.KILOMETERS,
         state_class=SensorStateClass.TOTAL_INCREASING,
@@ -214,13 +214,13 @@ SENSOR_DESCRIPTIONS: tuple[ImowSensorDescription, ...] = (
         transform=lambda v: round(int(v) / 1000, 1),
     ),
     ImowSensorDescription(
-        key="stat_blade_time", name="Blade Operating Time",
+        key="stat_blade_time", translation_key="stat_blade_time",
         device_class=SensorDeviceClass.DURATION, native_unit_of_measurement=UnitOfTime.HOURS,
         state_class=SensorStateClass.TOTAL, icon="mdi:knife",
         value_path=("statistics", "totalWorkingTimeOfCurrentCuttingKnifes"), transform=_hours,
     ),
     ImowSensorDescription(
-        key="stat_total_jobs", name="Total Mowing Jobs", icon="mdi:counter",
+        key="stat_total_jobs", translation_key="stat_total_jobs", icon="mdi:counter",
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_path=("statistics", "totalStartedMowingJobs"),
     ),
@@ -276,7 +276,7 @@ class ImowSensor(ImowEntity, SensorEntity):
 class ImowTimeRemainingSensor(ImowEntity, SensorEntity):
     """Minutes until the running job's end time (includes the drive home)."""
 
-    _attr_name = "Time Remaining"
+    _attr_translation_key = "time_remaining"
     _attr_icon = "mdi:timer-sand"
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = UnitOfTime.MINUTES
@@ -310,7 +310,7 @@ class ImowTimeRemainingSensor(ImowEntity, SensorEntity):
 class ImowErrorMessageSensor(ImowEntity, SensorEntity):
     """What the active errors are, in the myimow app's words ("Guide wire error")."""
 
-    _attr_name = "Error Message"
+    _attr_translation_key = "error_message"
     _attr_icon = "mdi:alert-circle-outline"
 
     def __init__(self, coordinator: ImowCoordinator, mower_id: str) -> None:

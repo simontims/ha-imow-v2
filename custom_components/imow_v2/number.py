@@ -31,7 +31,7 @@ class ImowMowingDurationNumber(ImowEntity, NumberEntity, RestoreEntity):
     and is not written back to the mower.
     """
 
-    _attr_name = "Default Mowing Duration"
+    _attr_translation_key = "default_mowing_duration"
     _attr_icon = "mdi:timer-edit"
     _attr_native_min_value = 5
     _attr_native_max_value = 480
