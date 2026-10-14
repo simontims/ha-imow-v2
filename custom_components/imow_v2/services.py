@@ -1,50 +1,47 @@
 """HA services for STIHL iMow v2.
 
 Service: imow_v2.intent
-  action (required): startMowing | start-mowing | pause | resume |
-                     end-job-and-return-to-dock | toDocking | edgeMowing |
-                     startMowingFromPoint
+  action (required): start-mowing | pause | resume | end-job-and-return-to-dock |
+                     clear-errors | force-status-update (plus friendly aliases)
   mower_device (optional): device_id from device registry
   mower_name   (optional): friendly name of the mower device
-  startpoint   (optional): zone/startpoint index for startMowingFromPoint
+  duration     (optional): minutes, for start-mowing
+  zone         (optional): mowing zone id (0 = from dock), for start-mowing
 """
 from __future__ import annotations
 
-import logging
-
-import aiohttp
 import voluptuous as vol
-from homeassistant.const import Platform
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers import entity_registry as er
 
-from .api import ImowApi, ImowApiError
-from .auth import ImowAuth, ImowAuthError
-from .const import DOMAIN
+from .const import (
+    CMD_CLEAR_ERRORS,
+    CMD_DOCK,
+    CMD_FORCE_UPDATE,
+    CMD_PAUSE,
+    CMD_RESUME,
+    CMD_START,
+    DOMAIN,
+)
 
-_LOGGER = logging.getLogger(__name__)
-
-# Accepted action names (normalised to the Gen5+ mower-commands API values)
+# Accepted action names → command names used by the myimow web app
 _ACTION_MAP = {
-    # Gen5+ myimow API command names
-    "start-mowing":               "start-mowing",
-    "pause":                      "pause",
-    "resume":                     "resume",
-    "end-job-and-return-to-dock": "end-job-and-return-to-dock",
-    "toDocking":                  "toDocking",
-    "edgeMowing":                 "edgeMowing",
-    "startMowingFromPoint":       "startMowingFromPoint",
-    # Friendly aliases
-    "startMowing":   "start-mowing",
-    "start_mowing":  "start-mowing",
-    "stop":          "end-job-and-return-to-dock",
-    "stop_mowing":   "end-job-and-return-to-dock",
-    "park":          "toDocking",
-    "dock":          "toDocking",
-    "edge":          "edgeMowing",
-    "edge_mowing":   "edgeMowing",
+    CMD_START: CMD_START,
+    CMD_PAUSE: CMD_PAUSE,
+    CMD_RESUME: CMD_RESUME,
+    CMD_DOCK: CMD_DOCK,
+    CMD_CLEAR_ERRORS: CMD_CLEAR_ERRORS,
+    CMD_FORCE_UPDATE: CMD_FORCE_UPDATE,
+    # Friendly aliases (incl. names older versions of this integration accepted)
+    "startMowing": CMD_START,
+    "start_mowing": CMD_START,
+    "stop": CMD_DOCK,
+    "stop_mowing": CMD_DOCK,
+    "park": CMD_DOCK,
+    "dock": CMD_DOCK,
+    "toDocking": CMD_DOCK,
+    "refresh": CMD_FORCE_UPDATE,
 }
 
 INTENT_SCHEMA = vol.All(
@@ -52,8 +49,8 @@ INTENT_SCHEMA = vol.All(
         {
             vol.Optional("mower_device"): cv.string,
             vol.Optional("mower_name"): cv.string,
-            vol.Optional("startpoint"): vol.Any(cv.string, int),
-            vol.Optional("duration"): vol.Coerce(int),
+            vol.Optional("duration"): vol.All(vol.Coerce(int), vol.Range(min=1, max=1440)),
+            vol.Optional("zone"): vol.Coerce(int),
             vol.Required("action"): vol.In(list(_ACTION_MAP)),
         },
         cv.has_at_least_one_key("mower_device", "mower_name"),
@@ -63,7 +60,6 @@ INTENT_SCHEMA = vol.All(
 
 async def async_setup_services(hass, entry) -> None:
     """Register iMow services."""
-
     if hass.services.has_service(DOMAIN, "intent"):
         return
 
@@ -75,76 +71,26 @@ async def async_setup_services(hass, entry) -> None:
 
 async def _handle_intent(hass, service_call) -> None:
     data = service_call.data
-    action_raw = data["action"]
-    cmd = _ACTION_MAP[action_raw]
-
+    cmd = _ACTION_MAP[data["action"]]
     mower_id = await _resolve_mower_id(hass, data)
 
-    coordinator = None
-    for coord in hass.data[DOMAIN].values():
-        if mower_id in coord.data:
-            coordinator = coord
-            break
+    coordinator = next(
+        (c for c in hass.data[DOMAIN].values() if mower_id in (c.data or {})), None
+    )
     if coordinator is None:
         raise HomeAssistantError(f"Mower '{mower_id}' is not available from any loaded iMow config entry")
 
-    api: ImowApi = coordinator._api
-    auth: ImowAuth = coordinator._auth
+    payload = None
+    if cmd == CMD_START:
+        duration_s = (
+            data["duration"] * 60 if "duration" in data
+            else coordinator.start_duration_s(mower_id)
+        )
+        payload = {"durationInSeconds": duration_s}
+        if "zone" in data:
+            payload["mowingZoneId"] = data["zone"]
 
-    payload: dict = {}
-    if cmd in ("start-mowing", "startMowingFromPoint"):
-        default_dur = 10800
-        try:
-            coord_data = coordinator.data.get(mower_id, {})
-            entity_reg = er.async_get(hass)
-            entity_id = entity_reg.async_get_entity_id(
-                Platform.NUMBER,
-                DOMAIN,
-                f"{mower_id}_default_mowing_duration",
-            )
-            if entity_id:
-                state = hass.states.get(entity_id)
-                if state and state.state not in (None, "unknown", "unavailable"):
-                    default_dur = int(float(state.state) * 60)
-                else:
-                    default_dur = int(coord_data.get("_defaultDuration", 10800))
-            else:
-                default_dur = int(coord_data.get("_defaultDuration", 10800))
-        except (TypeError, ValueError):
-            default_dur = int(
-                coordinator.data.get(mower_id, {}).get("_defaultDuration", 10800)
-            )
-        duration = int(data.get("duration", default_dur))
-        payload = {"durationInSeconds": duration}
-        if cmd == "startMowingFromPoint" and "startpoint" in data:
-            payload["mowingZoneId"] = int(data["startpoint"])
-
-    try:
-        await api.send_command(mower_id, cmd, payload)
-    except ImowAuthError:
-        try:
-            await auth.refresh()
-            _LOGGER.debug("Token refreshed after auth error in intent")
-            coordinator._persist_auth_tokens()
-        except Exception as err:
-            _LOGGER.warning("Token refresh failed (%s), attempting full re-login", err)
-            try:
-                await auth.login(coordinator._username, coordinator._password)
-                _LOGGER.info("Re-login successful for intent")
-                coordinator._persist_auth_tokens()
-            except ImowAuthError as err:
-                raise HomeAssistantError(f"Re-authentication failed: {err}") from err
-        try:
-            await api.send_command(mower_id, cmd, payload)
-        except (ImowApiError, ImowAuthError) as err:
-            raise HomeAssistantError(f"iMow command failed: {err}") from err
-    except ImowApiError as err:
-        raise HomeAssistantError(f"iMow command failed: {err}") from err
-    except aiohttp.ClientError as err:
-        raise HomeAssistantError(f"iMow network error: {err}") from err
-
-    await coordinator.async_request_refresh()
-    _LOGGER.info("iMow intent '%s' sent to mower %s", cmd, mower_id)
+    await coordinator.async_send_command(mower_id, cmd, payload)
 
 
 async def _resolve_mower_id(hass, data: dict) -> str:
@@ -152,7 +98,7 @@ async def _resolve_mower_id(hass, data: dict) -> str:
 
     all_ids: set[str] = set()
     for coordinator in domain_data.values():
-        all_ids.update(coordinator.data.keys())
+        all_ids.update((coordinator.data or {}).keys())
 
     if "mower_device" in data:
         registry = dr.async_get(hass)
@@ -164,13 +110,12 @@ async def _resolve_mower_id(hass, data: dict) -> str:
         raise HomeAssistantError(f"Device '{data['mower_device']}' not found in iMow devices")
 
     name_query = data["mower_name"].lower()
-    name_matches: list[str] = []
-    for coordinator in domain_data.values():
-        for mid, mdata in coordinator.data.items():
-            dev_name = (mdata.get("_deviceName") or "").lower()
-            if name_query in dev_name:
-                name_matches.append(mid)
-    name_matches = list(dict.fromkeys(name_matches))
+    name_matches = list(dict.fromkeys(
+        mid
+        for coordinator in domain_data.values()
+        for mid, mdata in (coordinator.data or {}).items()
+        if name_query in (mdata.get("_deviceName") or "").lower()
+    ))
 
     if len(name_matches) == 1:
         return name_matches[0]
@@ -179,12 +124,9 @@ async def _resolve_mower_id(hass, data: dict) -> str:
             f"Mower name '{data.get('mower_name')}' matches multiple iMow devices {name_matches}; "
             "use mower_device to disambiguate."
         )
-
     if len(all_ids) == 1:
         return next(iter(all_ids))
-
-    mower_ids = list(all_ids)
     raise HomeAssistantError(
         f"Could not find mower matching '{data.get('mower_name')}'. "
-        f"Available mowers: {mower_ids}"
+        f"Available mowers: {sorted(all_ids)}"
     )

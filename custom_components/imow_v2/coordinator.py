@@ -1,53 +1,66 @@
-"""DataUpdateCoordinator for STIHL iMow v2."""
+"""DataUpdateCoordinator for STIHL iMow v2.
+
+Polling fetches the full picture (cloud twin, settings incl. GPS, mowing plan,
+event history, advices) and asks the mower for a fresh report. Between polls,
+SignalR pushes partial updates which are merged into the same data and pushed
+to entities straight away.
+"""
 from __future__ import annotations
 
+import asyncio
+import copy
 import logging
+from functools import partial
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.const import Platform
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .auth import ImowAuth, ImowAuthError
 from .api import ImowApi, ImowApiError
-from .const import DOMAIN
+from .auth import ImowAuth, ImowAuthError, ImowTokenRejected
+from .const import (
+    DOMAIN,
+    OVERALL_STATE_GROUPS,
+    SIGNALR_ADVICES,
+    SIGNALR_PLAN,
+    SIGNALR_SETTINGS,
+    SIGNALR_STATUS,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
-# Job states where the mower is (or is about to be) actively working.
-_ACTIVE_JOB_STATES = frozenset({
-    "plannedJobRunning",
-    "mowing",
-    "manualMowing",
-    "edgeMowing",
-    "returning",
-    "paused",
-})
+_HISTORY_KEEP = 25          # events kept in memory / exposed as attributes
+_PUSH_DEBOUNCE_S = 1.0      # SignalR bursts arrive as dozens of tiny messages
+_FORCE_SETTLE_S = 6         # cloud twin lag after force-status-update (no SignalR)
 
-# Cached overallState values that often lag behind an active job.
-_STALE_OVERALL_STATES = frozenset({
-    "charging",
-    "docked",
-    "parked",
-    "idle",
-})
 
-# Job states that imply the mower has left the dock (isDocked often lags in the cloud twin).
-_UNDOCKED_JOB_STATES = frozenset({
-    "plannedJobRunning",
-    "manualJobRunning",
-    "mowing",
-    "manualMowing",
-    "edgeMowing",
-    "returning",
-    "drivingToZone",
-    "paused",
-})
+def _deep_merge(target: dict, patch: dict) -> None:
+    """Merge a SignalR partial document into target (lists are replaced)."""
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            _deep_merge(target[key], value)
+        else:
+            target[key] = copy.deepcopy(value)
+
+
+def overall_category(state: str | None) -> str | None:
+    """Group a raw overallState into the categories the myimow app uses."""
+    if not state:
+        return None
+    for category, members in OVERALL_STATE_GROUPS.items():
+        if state in members:
+            return category
+    return None
 
 
 class ImowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Fetches data for all mowers and computes derived fields."""
+    """Fetches data for all mowers and merges live SignalR updates."""
 
     def __init__(
         self,
@@ -63,6 +76,7 @@ class ImowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             hass,
             _LOGGER,
             name=DOMAIN,
+            config_entry=entry,
             update_interval=timedelta(minutes=scan_interval_minutes),
         )
         self._auth = auth
@@ -70,123 +84,37 @@ class ImowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._username = username
         self._password = password
         self._entry = entry
-        # mower_id → full merged data dict
+        self._auth_lock = asyncio.Lock()
+        self._push_unsub: CALLBACK_TYPE | None = None
+        self._history_unsub: dict[str, CALLBACK_TYPE] = {}
+        self.signalr = None  # set by __init__.py once created
+        self.options_snapshot: dict[str, Any] = {}
         self.mowers: dict[str, dict[str, Any]] = {}
 
     # ------------------------------------------------------------------
-    # DataUpdateCoordinator overrides
+    # Authentication
     # ------------------------------------------------------------------
 
-    async def _async_update_data(self) -> dict[str, Any]:
-        """Fetch latest data for every mower."""
-        try:
-            return await self._fetch_all()
-        except UpdateFailed as err:
-            if self.data is not None:
-                _LOGGER.warning(
-                    "iMow update failed (%s) — keeping last known state", err
-                )
-                return self.data
-            raise
+    async def async_ensure_token(self) -> None:
+        """Have a valid access token, re-logging in only if STIHL rejected ours."""
+        async with self._auth_lock:
+            if self._auth.access_token and not self._auth.token_needs_refresh:
+                return
+            await self._refresh_or_login()
 
-    async def _fetch_all(self) -> dict[str, Any]:
-        """Inner fetch — raises UpdateFailed on any unrecoverable error."""
-        if self._auth.token_needs_refresh:
-            _LOGGER.debug("Proactively refreshing token before poll")
-            await self._try_refresh_and_retry()
-        try:
-            mowers = await self._api.get_mowers()
-        except ImowAuthError:
-            await self._try_refresh_and_retry()
-            try:
-                mowers = await self._api.get_mowers()
-            except (ImowApiError, ImowAuthError) as err:
-                raise UpdateFailed(str(err)) from err
-        except ImowApiError as err:
-            raise UpdateFailed(str(err)) from err
-
-        result: dict[str, Any] = {}
-
-        for mower in mowers:
-            mower_id = mower.get("id") or mower.get("deviceId") or mower.get("serialNumber")
-            if not mower_id:
-                continue
-            try:
-                dashboard = await self._api.get_dashboard(str(mower_id))
-                plan = await self._api.get_mowing_plan(str(mower_id))
-                stats = await self._api.get_statistics(str(mower_id))
-            except ImowAuthError:
-                await self._try_refresh_and_retry()
-                try:
-                    dashboard = await self._api.get_dashboard(str(mower_id))
-                    plan = await self._api.get_mowing_plan(str(mower_id))
-                    stats = await self._api.get_statistics(str(mower_id))
-                except (ImowApiError, ImowAuthError) as err:
-                    _LOGGER.warning(
-                        "Could not fetch data for mower %s after re-auth: %s",
-                        mower_id,
-                        err,
-                    )
-                    continue
-            except ImowApiError as err:
-                _LOGGER.warning("Could not fetch data for mower %s: %s", mower_id, err)
-                continue
-
-            merged = {**mower, **dashboard}
-            # Fix job times: API returns local device time without timezone.
-            # Convert to proper UTC so HA displays the correct local time.
-            tz_offset_s = merged.get("device", {}).get("deviceTimeZoneOffsetInSeconds", 0)
-            if tz_offset_s and merged.get("job"):
-                job = merged["job"]
-                for _key in ("startTime", "endTime"):
-                    _val = job.get(_key, "")
-                    # Only fix naive strings (no Z, no +, no offset in time part)
-                    if _val and "Z" not in _val and len(_val) <= 20 and "+" not in _val[10:]:
-                        try:
-                            _local = datetime.fromisoformat(_val)
-                            _utc = (_local - timedelta(seconds=tz_offset_s)).replace(
-                                tzinfo=timezone.utc
-                            )
-                            job[_key] = _utc.isoformat()
-                        except ValueError:
-                            pass
-            merged["_plan"] = plan
-            merged["_nextStart"] = self._compute_next_start(plan, merged)
-            merged["_defaultDuration"] = max(int(merged.get("setting", {}).get("defaultManualMowingDuration", 10800) or 10800), 10800)
-            self._resolve_overall_state(merged)
-            self._resolve_docked(merged)
-            if stats:
-                merged["statistics"] = stats
-            # Resolve device display name: nickname > type > fallback
-            merged["_deviceName"] = (
-                merged.get("setting", {}).get("deviceNickname")
-                or merged.get("device", {}).get("type")
-                or f"iMow {str(mower_id)[-6:]}"
-            )
-            result[str(mower_id)] = merged
-            self.mowers[str(mower_id)] = merged
-
-        return result
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    async def _try_refresh_and_retry(self) -> None:
-        """Refresh the access token, falling back to full re-login if needed."""
+    async def _refresh_or_login(self) -> None:
         try:
             await self._auth.refresh()
-            _LOGGER.debug("Token refreshed successfully")
-            self._persist_auth_tokens()
-            return
-        except Exception as err:
-            _LOGGER.warning("Token refresh failed (%s), attempting full re-login", err)
-        try:
+        except ImowTokenRejected as err:
+            _LOGGER.warning("Refresh token rejected (%s), logging in again", err)
             await self._auth.login(self._username, self._password)
             _LOGGER.info("Re-login successful")
-            self._persist_auth_tokens()
-        except ImowAuthError as err:
-            raise UpdateFailed(f"Re-authentication failed: {err}") from err
+        self._persist_auth_tokens()
+
+    async def _force_reauth(self) -> None:
+        """Refresh after an API 401, even if the token looked valid."""
+        async with self._auth_lock:
+            await self._refresh_or_login()
 
     def _persist_auth_tokens(self) -> None:
         rt = self._auth.refresh_token
@@ -196,68 +124,213 @@ class ImowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 data={**self._entry.data, "refresh_token": rt},
             )
 
-    @staticmethod
-    def _resolve_overall_state(mower: dict) -> None:
-        """Align device.overallState with job when the cloud twin is inconsistent.
+    async def _call(self, func, *args):
+        """Call an API method, re-authenticating once on a 401."""
+        await self.async_ensure_token()
+        try:
+            return await func(*args)
+        except ImowAuthError:
+            await self._force_reauth()
+            return await func(*args)
 
-        STIHL often returns job.state=plannedJobRunning while device.overallState
-        still says charging (especially on cached dashboard data without force-update).
-        """
-        job_state = (mower.get("job") or {}).get("state")
-        if job_state not in _ACTIVE_JOB_STATES:
-            return
+    # ------------------------------------------------------------------
+    # Polling
+    # ------------------------------------------------------------------
 
-        device = mower.setdefault("device", {})
-        overall = dict(device.get("overallState") or {})
-        raw_state = overall.get("state")
-        is_docked = device.get("isDocked")
+    async def _async_update_data(self) -> dict[str, Any]:
+        try:
+            return await self._fetch_all()
+        except (ImowAuthError, ImowApiError) as err:
+            raise UpdateFailed(str(err)) from err
 
-        # isDocked often lags while the mower is already mowing — trust job state.
-        if raw_state in _STALE_OVERALL_STATES:
-            _LOGGER.debug(
-                "Correcting stale overallState %s -> mowing (job=%s, isDocked=%s)",
-                raw_state,
-                job_state,
-                is_docked,
+    async def _fetch_all(self) -> dict[str, Any]:
+        mowers = await self._call(self._api.get_mowers)
+        live = self.signalr is not None and self.signalr.connected
+
+        ids = [str(m.get("deviceId") or m.get("id") or "") for m in mowers]
+        ids = [i for i in ids if i]
+        # Ask every mower for a fresh report. Over SignalR the answer arrives as
+        # a push burst; without it, give the cloud twin a moment and re-read.
+        forced = await asyncio.gather(
+            *(self._call(self._api.force_status_update, i) for i in ids),
+            return_exceptions=True,
+        )
+        for mower_id, res in zip(ids, forced):
+            if isinstance(res, Exception):
+                _LOGGER.debug("force-status-update failed for %s: %s", mower_id, res)
+        if ids and not live and not all(isinstance(r, Exception) for r in forced):
+            await asyncio.sleep(_FORCE_SETTLE_S)
+            mowers = await self._call(self._api.get_mowers)
+
+        result: dict[str, Any] = {}
+        for mower in mowers:
+            mower_id = str(mower.get("deviceId") or mower.get("id") or "")
+            if not mower_id:
+                continue
+            settings, plan, history, advices = await asyncio.gather(
+                self._call(self._api.get_mower_settings, mower_id),
+                self._call(self._api.get_mowing_plan, mower_id),
+                self._call(self._api.get_event_history, mower_id),
+                self._call(self._api.get_advices, mower_id),
+                return_exceptions=True,
             )
-            overall["state"] = "mowing"
+            previous = (self.data or {}).get(mower_id, {})
+            merged = copy.deepcopy(mower)
+            # Optional extras: on failure keep what we had rather than blanking entities
+            for key, value in (("_settings", settings), ("_plan", plan),
+                               ("_history", history), ("_advices", advices)):
+                if isinstance(value, Exception):
+                    _LOGGER.debug("Fetching %s for %s failed: %s", key, mower_id, value)
+                    if key in previous:
+                        merged[key] = previous[key]
+                else:
+                    merged[key] = value[:_HISTORY_KEEP] if key == "_history" else value
+            self._derive(merged, mower_id)
+            result[mower_id] = merged
 
-        device["overallState"] = overall
+        self.mowers = result
+        return result
 
-    @staticmethod
-    def _resolve_docked(mower: dict) -> None:
-        """Clear stale isDocked when job state shows the mower is working."""
-        job_state = (mower.get("job") or {}).get("state")
-        if job_state not in _UNDOCKED_JOB_STATES:
+    # ------------------------------------------------------------------
+    # SignalR push
+    # ------------------------------------------------------------------
+
+    @callback
+    def handle_push(self, target: str, payload: dict[str, Any]) -> None:
+        """Merge one SignalR partial update into the current data."""
+        mower_id = payload.get("deviceId")
+        if not self.data or mower_id not in self.data:
             return
-        device = mower.setdefault("device", {})
-        if device.get("isDocked"):
-            _LOGGER.debug("Correcting stale isDocked -> False (job=%s)", job_state)
-            device["isDocked"] = False
+        mower = self.data[mower_id]
+        patch = {k: v for k, v in payload.items() if k != "deviceId"}
+        if target == SIGNALR_STATUS:
+            _deep_merge(mower, patch)
+            # A state or job change usually means a new event-log entry
+            if ("job" in patch or "overallState" in (patch.get("device") or {})) \
+                    and mower_id not in self._history_unsub:
+                self._history_unsub[mower_id] = async_call_later(
+                    self.hass, 10, partial(self._history_timer_fired, mower_id)
+                )
+        elif target == SIGNALR_SETTINGS:
+            _deep_merge(mower.setdefault("_settings", {}), patch)
+        elif target == SIGNALR_PLAN:
+            _deep_merge(mower.setdefault("_plan", {}), patch)
+        elif target == SIGNALR_ADVICES:
+            mower["_advices"] = patch.get("advices", [])
+        else:
+            _LOGGER.debug("Ignoring SignalR target %s", target)
+            return
+        self._derive(mower, mower_id)
+        # Not async_set_updated_data(): that would keep postponing the poll
+        if self._push_unsub is None:
+            self._push_unsub = async_call_later(
+                self.hass, _PUSH_DEBOUNCE_S, self._flush_push
+            )
+
+    @callback
+    def _flush_push(self, _now) -> None:
+        self._push_unsub = None
+        self.async_update_listeners()
+
+    @callback
+    def _history_timer_fired(self, mower_id: str, _now) -> None:
+        self.config_entry.async_create_background_task(
+            self.hass, self._async_refresh_history(mower_id), "imow_v2 history refresh"
+        )
+
+    async def _async_refresh_history(self, mower_id: str) -> None:
+        self._history_unsub.pop(mower_id, None)
+        try:
+            history = await self._call(self._api.get_event_history, mower_id)
+        except (ImowAuthError, ImowApiError) as err:
+            _LOGGER.debug("Event history refresh failed: %s", err)
+            return
+        mower = (self.data or {}).get(mower_id)
+        if mower is not None:
+            mower["_history"] = history[:_HISTORY_KEEP]
+            self._derive(mower, mower_id)
+            self.async_update_listeners()
+
+    @callback
+    def async_cancel_timers(self) -> None:
+        if self._push_unsub:
+            self._push_unsub()
+            self._push_unsub = None
+        for unsub in self._history_unsub.values():
+            unsub()
+        self._history_unsub.clear()
+
+    async def async_on_signalr_connect(self) -> None:
+        """After (re)connecting, request a burst so nothing missed stays stale."""
+        for mower_id in list(self.data or {}):
+            try:
+                await self._call(self._api.force_status_update, mower_id)
+            except (ImowAuthError, ImowApiError) as err:
+                _LOGGER.debug("force-status-update on connect failed: %s", err)
+
+    # ------------------------------------------------------------------
+    # Commands
+    # ------------------------------------------------------------------
+
+    async def async_send_command(
+        self, mower_id: str, command: str, payload: dict | None = None
+    ) -> None:
+        try:
+            await self._call(self._api.send_command, mower_id, command, payload)
+        except (ImowAuthError, ImowApiError) as err:
+            raise HomeAssistantError(f"iMow command '{command}' failed: {err}") from err
+        _LOGGER.info("iMow command '%s' sent to mower %s", command, mower_id)
+        if not (self.signalr and self.signalr.connected):
+            await self.async_request_refresh()
+
+    def default_duration_s(self, mower_id: str) -> int:
+        """The mower's own default manual mowing duration, in seconds."""
+        setting = (self.data or {}).get(mower_id, {}).get("setting") or {}
+        try:
+            return int(setting.get("defaultManualMowingDuration") or 3600)
+        except (TypeError, ValueError):
+            return 3600
+
+    def start_duration_s(self, mower_id: str) -> int:
+        """Duration for a Start from HA: the duration number, else the mower default."""
+        entity_id = er.async_get(self.hass).async_get_entity_id(
+            Platform.NUMBER, DOMAIN, f"{mower_id}_default_mowing_duration"
+        )
+        state = self.hass.states.get(entity_id) if entity_id else None
+        try:
+            return int(float(state.state) * 60)
+        except (AttributeError, TypeError, ValueError):
+            return self.default_duration_s(mower_id)
+
+    # ------------------------------------------------------------------
+    # Derived fields
+    # ------------------------------------------------------------------
 
     @staticmethod
-    def _compute_next_start(plan: dict, mower: dict) -> str | None:
-        """Return ISO-8601 timestamp of next scheduled mow start.
-
-        The Gen5+ API already provides the next job start time in job.startTime,
-        so we use that directly. When state is nextPlannedJobAvailable it is the
-        future start; when mowing it is the current job start.
-        """
-        job = mower.get("job", {})
-        return job.get("startTime")
-
-    # ------------------------------------------------------------------
-    # Command helpers (used by button/select entities)
-    # ------------------------------------------------------------------
-
-    async def async_start_mowing(self, mower_id: str) -> None:
-        await self._api.send_command(mower_id, "startMowing")
-        await self.async_request_refresh()
-
-    async def async_stop_mowing(self, mower_id: str) -> None:
-        await self._api.send_command(mower_id, "stopMowing")
-        await self.async_request_refresh()
-
-    async def async_park(self, mower_id: str) -> None:
-        await self._api.send_command(mower_id, "park")
-        await self.async_request_refresh()
+    def _derive(mower: dict[str, Any], mower_id: str) -> None:
+        device = mower.get("device") or {}
+        # Job times come as naive device-local time; convert to UTC once
+        tz_offset_s = device.get("deviceTimeZoneOffsetInSeconds") or 0
+        job = mower.get("job") or {}
+        for key in ("startTime", "endTime"):
+            val = job.get(key)
+            if tz_offset_s and isinstance(val, str) and val and "Z" not in val \
+                    and "+" not in val[10:] and len(val) <= 20:
+                try:
+                    local = datetime.fromisoformat(val)
+                    job[key] = (local - timedelta(seconds=tz_offset_s)).replace(
+                        tzinfo=timezone.utc
+                    ).isoformat()
+                except ValueError:
+                    pass
+        mower["_nextStart"] = job.get("startTime")
+        mower["_activity"] = overall_category(
+            (device.get("overallState") or {}).get("state")
+        )
+        history = mower.get("_history") or []
+        mower["_lastEvent"] = history[0] if history else None
+        mower["_deviceName"] = (
+            (mower.get("setting") or {}).get("deviceNickname")
+            or device.get("type")
+            or f"iMow {mower_id[-6:]}"
+        )

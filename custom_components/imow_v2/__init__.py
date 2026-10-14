@@ -10,17 +10,20 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .auth import ImowAuth, ImowAuthError
+from .auth import ImowAuth, ImowAuthError, ImowTokenRejected
 from .api import ImowApi
 from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
 from .coordinator import ImowCoordinator
 from .services import async_setup_services
+from .signalr import ImowSignalR
 
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [
+    Platform.LAWN_MOWER,
     Platform.SENSOR,
     Platform.BINARY_SENSOR,
+    Platform.BUTTON,
     Platform.DEVICE_TRACKER,
     Platform.NUMBER,
 ]
@@ -31,14 +34,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     session = async_get_clientsession(hass)
     auth = ImowAuth(session)
 
-    # Restore tokens from stored data (no full login needed on restart)
+    # Restore tokens from stored data; only log in with the password when STIHL
+    # actually rejects the refresh token (not on a network hiccup)
     try:
         if entry.data.get("refresh_token"):
             auth.refresh_token = entry.data["refresh_token"]
             try:
                 await auth.refresh()
-            except ImowAuthError:
-                _LOGGER.warning("Token refresh failed, falling back to full login")
+            except ImowTokenRejected:
+                _LOGGER.warning("Stored refresh token rejected, logging in again")
                 await auth.login(entry.data["username"], entry.data["password"])
         else:
             await auth.login(entry.data["username"], entry.data["password"])
@@ -47,41 +51,48 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except aiohttp.ClientError as err:
         raise ConfigEntryNotReady(f"Network not ready: {err}") from err
 
-    # Persist refreshed tokens
-    if auth.refresh_token and auth.refresh_token != entry.data.get("refresh_token"):
-        hass.config_entries.async_update_entry(
-            entry,
-            data={**entry.data, "refresh_token": auth.refresh_token},
-        )
-
     api = ImowApi(session, auth)
-    scan_interval = entry.options.get("scan_interval", DEFAULT_SCAN_INTERVAL)
     coordinator = ImowCoordinator(
         hass,
         auth,
         api,
-        scan_interval,
+        entry.options.get("scan_interval", DEFAULT_SCAN_INTERVAL),
         entry.data["username"],
         entry.data["password"],
         entry,
     )
+    coordinator._persist_auth_tokens()
 
-    try:
-        await coordinator.async_config_entry_first_refresh()
-    except Exception as err:
-        raise ConfigEntryNotReady(f"First data fetch failed: {err}") from err
+    await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     await async_setup_services(hass, entry)
 
+    coordinator.signalr = ImowSignalR(
+        session,
+        auth,
+        api,
+        coordinator.handle_push,
+        coordinator.async_ensure_token,
+        coordinator.async_on_signalr_connect,
+    )
+    coordinator.signalr.start(hass)
+
+    coordinator.options_snapshot = dict(entry.options)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    coordinator: ImowCoordinator | None = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if coordinator is not None:
+        if coordinator.signalr:
+            await coordinator.signalr.stop()
+        coordinator.async_cancel_timers()
+
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         domain_data = hass.data.get(DOMAIN, {})
@@ -94,5 +105,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload when options change."""
+    """Reload when options change.
+
+    Update listeners also fire when entry.data changes, which happens every
+    time a rotated refresh token is persisted; reloading then would restart
+    everything (and the SignalR connection) every ~15 minutes.
+    """
+    coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if coordinator is not None and coordinator.options_snapshot == dict(entry.options):
+        return
     await hass.config_entries.async_reload(entry.entry_id)

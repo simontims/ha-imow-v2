@@ -36,7 +36,7 @@
       "fields": {
         "action": {
           "name": "Action",
-          "description": "Command to send: start-mowing, pause, resume, end-job-and-return-to-dock, toDocking, edgeMowing, startMowingFromPoint"
+          "description": "Command to send: start-mowing, pause, resume, end-job-and-return-to-dock, clear-errors, force-status-update"
         },
         "mower_device": {
           "name": "Mower device",
@@ -46,13 +46,13 @@
           "name": "Mower name",
           "description": "Friendly name of the mower device."
         },
-        "startpoint": {
-          "name": "Start point",
-          "description": "Zone / start-point index for the startMowingFromPoint action."
-        },
         "duration": {
           "name": "Duration",
-          "description": "Mowing duration in seconds for start-mowing / startMowingFromPoint (optional; uses the mower default if omitted)."
+          "description": "Minutes to mow (start-mowing only). Defaults to the Default Mowing Duration entity."
+        },
+        "zone": {
+          "name": "Zone",
+          "description": "Mowing zone id to start in (start-mowing only); 0 starts from the dock."
         }
       }
     }

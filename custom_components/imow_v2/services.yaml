@@ -5,10 +5,9 @@ intent:
     action:
       name: Action
       description: >
-        Command to send. Accepted values:
-        start-mowing, pause, resume, end-job-and-return-to-dock,
-        toDocking, edgeMowing, startMowingFromPoint.
-        Friendly aliases: startMowing, stop_mowing, park, edge.
+        Command to send: start-mowing, pause, resume,
+        end-job-and-return-to-dock, clear-errors, force-status-update.
+        Friendly aliases: startMowing, stop, park, dock, refresh.
       required: true
       example: "start-mowing"
       selector:
@@ -18,9 +17,8 @@ intent:
             - "pause"
             - "resume"
             - "end-job-and-return-to-dock"
-            - "toDocking"
-            - "edgeMowing"
-            - "startMowingFromPoint"
+            - "clear-errors"
+            - "force-status-update"
     mower_device:
       name: Mower device
       description: Device ID from the HA device registry.
@@ -36,13 +34,24 @@ intent:
       example: "My iMow"
       selector:
         text:
-    startpoint:
-      name: Start point
-      description: Zone / start-point index (for startMowingFromPoint only).
+    duration:
+      name: Duration
+      description: Minutes to mow (start-mowing only). Defaults to the Default Mowing Duration entity.
+      required: false
+      example: 60
+      selector:
+        number:
+          min: 5
+          max: 480
+          unit_of_measurement: min
+          mode: box
+    zone:
+      name: Zone
+      description: Mowing zone id to start in (start-mowing only); 0 starts from the dock.
       required: false
       example: 1
       selector:
         number:
-          min: 1
-          max: 10
+          min: 0
+          max: 20
           mode: box

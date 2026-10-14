@@ -1,6 +1,9 @@
 """STIHL iMow Azure B2C PKCE authentication (myimow / Gen5+)."""
 from __future__ import annotations
 
+import asyncio
+import base64
+import hashlib
 import json
 import logging
 import re
@@ -20,8 +23,6 @@ from .const import (
     B2C_SCOPE,
     B2C_TOKEN_URL,
     B2C_AUTHORIZE_URL,
-    PKCE_CODE_CHALLENGE,
-    PKCE_CODE_VERIFIER,
     USER_AGENT,
 )
 
@@ -30,6 +31,23 @@ _LOGGER = logging.getLogger(__name__)
 
 class ImowAuthError(Exception):
     """Raised when authentication fails."""
+
+
+class ImowTokenRejected(ImowAuthError):
+    """Raised when STIHL rejects the refresh token, so a full login is needed.
+
+    Network errors and server hiccups raise plain ImowAuthError instead: those
+    are worth retrying later, not a reason to send the password again.
+    """
+
+
+def _pkce_pair() -> tuple[str, str]:
+    """Return a fresh (code_verifier, code_challenge) pair for one login."""
+    verifier = secrets.token_urlsafe(32)
+    challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode()).digest()
+    ).rstrip(b"=").decode()
+    return verifier, challenge
 
 
 class ImowAuth:
@@ -42,6 +60,8 @@ class ImowAuth:
         self.refresh_token: str | None = None
         self.expires_in: int = 0
         self._token_acquired_at: float = 0.0
+        self._code_verifier: str = ""
+        self._code_challenge: str = ""
 
     # ------------------------------------------------------------------
     # Public helpers
@@ -78,6 +98,7 @@ class ImowAuth:
         mixed-case in step 2, which breaks Python's RFC-6265 path matching).
         """
         self._state = secrets.token_urlsafe(16)
+        self._code_verifier, self._code_challenge = _pkce_pair()
         # ── Step 1: capture cookies with a jar ───────────────────────────
         jar = aiohttp.CookieJar(unsafe=True)
         async with aiohttp.ClientSession(cookie_jar=jar) as s1:
@@ -113,6 +134,7 @@ class ImowAuth:
         try:
             async with self._session.post(
                 B2C_TOKEN_URL,
+                timeout=aiohttp.ClientTimeout(total=30),
                 data={
                     "grant_type": "refresh_token",
                     "refresh_token": self.refresh_token,
@@ -121,17 +143,26 @@ class ImowAuth:
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             ) as resp:
                 text = await resp.text()
+                if resp.status in (400, 401):
+                    # invalid_grant: expired, revoked or unknown refresh token
+                    raise ImowTokenRejected(f"Token refresh rejected (HTTP {resp.status})")
                 if resp.status >= 400:
                     raise ImowAuthError(f"Token refresh failed (HTTP {resp.status})")
                 try:
                     data = json.loads(text)
                 except json.JSONDecodeError as err:
-                    raise ImowAuthError("Token refresh failed: non-JSON response") from err
-        except aiohttp.ClientError as err:
+                    # Seen once in the wild; log enough to identify it next time.
+                    # Treated as a rejection: a fresh login is what recovered it.
+                    _LOGGER.warning(
+                        "Token refresh: non-JSON reply (HTTP %s, %s): %.300s",
+                        resp.status, resp.content_type, text,
+                    )
+                    raise ImowTokenRejected("Token refresh failed: non-JSON response") from err
+        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             raise ImowAuthError(f"Token refresh network error: {err}") from err
         if not data.get("access_token"):
             err_code = data.get("error") if isinstance(data, dict) else None
-            raise ImowAuthError(
+            raise ImowTokenRejected(
                 f"Token refresh failed: {err_code or 'no access_token in response'}"
             )
         self._apply_token(data)
@@ -147,7 +178,7 @@ class ImowAuth:
             "response_type": "code",
             "code_challenge_method": "S256",
             "scope": B2C_SCOPE,
-            "code_challenge": PKCE_CODE_CHALLENGE,
+            "code_challenge": self._code_challenge,
             "response_mode": "query",
             "redirect_uri": B2C_REDIRECT_URI,
             "client_id": B2C_CLIENT_ID,
@@ -271,7 +302,7 @@ class ImowAuth:
                 B2C_TOKEN_URL,
                 data={
                     "code": code,
-                    "code_verifier": PKCE_CODE_VERIFIER,
+                    "code_verifier": self._code_verifier,
                     "redirect_uri": B2C_REDIRECT_URI,
                     "client_id": B2C_CLIENT_ID,
                     "grant_type": "authorization_code",

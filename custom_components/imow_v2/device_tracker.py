@@ -1,16 +1,16 @@
 """Device tracker platform — shows the mower on the HA map."""
 from __future__ import annotations
 
-from homeassistant.components.device_tracker import SourceType
-from homeassistant.components.device_tracker.config_entry import TrackerEntity
+from typing import Any
+
+from homeassistant.components.device_tracker import SourceType, TrackerEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, MANUFACTURER
+from .const import DOMAIN
 from .coordinator import ImowCoordinator
+from .entity import ImowEntity
 
 
 async def async_setup_entry(
@@ -19,73 +19,48 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: ImowCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
-        ImowTrackerEntity(coordinator, mower_id, coordinator.data[mower_id])
-        for mower_id in coordinator.data
-    )
+    async_add_entities(ImowTrackerEntity(coordinator, mower_id) for mower_id in coordinator.data)
 
 
-class ImowTrackerEntity(CoordinatorEntity[ImowCoordinator], TrackerEntity):
-    """Represents the mower as a GPS device tracker."""
+class ImowTrackerEntity(ImowEntity, TrackerEntity):
+    """The mower's GPS position, from mower-settings → location."""
 
-    _attr_has_entity_name = True
     _attr_name = "Location"
     _attr_icon = "mdi:robot-mower"
+    _attr_source_type = SourceType.GPS
 
-    def __init__(self, coordinator: ImowCoordinator, mower_id: str, mower_data: dict) -> None:
-        super().__init__(coordinator)
-        self._mower_id = mower_id
-        self._attr_unique_id = f"{mower_id}_tracker"
-
-        device_name = mower_data.get("_deviceName") or f"iMow {mower_id[-6:]}"
-        model = mower_data.get("device", {}).get("type") or "STIHL iMow Gen5+"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, mower_id)},
-            name=device_name,
-            manufacturer=MANUFACTURER,
-            model=model,
-        )
+    def __init__(self, coordinator: ImowCoordinator, mower_id: str) -> None:
+        super().__init__(coordinator, mower_id, "tracker")
 
     @property
-    def source_type(self) -> SourceType:
-        return SourceType.GPS
+    def _location(self) -> dict[str, Any]:
+        settings = self.mower.get("_settings") or {}
+        if not (settings.get("locationValidity") or {}).get("isValid", True):
+            return {}
+        return settings.get("location") or {}
+
+    def _coord(self, key: str) -> float | None:
+        try:
+            return float(self._location[key])
+        except (KeyError, TypeError, ValueError):
+            return None
 
     @property
     def latitude(self) -> float | None:
-        return self._get_gps("latitude", "lat", "Latitude")
+        return self._coord("latitude")
 
     @property
     def longitude(self) -> float | None:
-        return self._get_gps("longitude", "lng", "lon", "Longitude")
+        return self._coord("longitude")
 
     @property
-    def location_accuracy(self) -> int:
-        mower = self.coordinator.data.get(self._mower_id, {})
-        gps = mower.get("gps") or {}
-        acc = gps.get("accuracy") or gps.get("Accuracy")
-        if acc is None:
-            return 10
-        try:
-            return int(acc)
-        except (TypeError, ValueError):
-            return 0
+    def location_accuracy(self) -> float:
+        return self._coord("accuracy") or 0
 
-    def _get_gps(self, *keys: str) -> float | None:
-        mower = self.coordinator.data.get(self._mower_id, {})
-        # Try top-level gps dict
-        gps = mower.get("gps") or {}
-        for k in keys:
-            if gps.get(k) is not None:
-                try:
-                    return float(gps[k])
-                except (ValueError, TypeError):
-                    pass
-        # Try coordinates at top level (some API versions)
-        for k in keys:
-            candidate = mower.get(f"coordinate{k.capitalize()}") or mower.get(k)
-            if candidate is not None:
-                try:
-                    return float(candidate)
-                except (ValueError, TypeError):
-                    pass
-        return None
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        settings = self.mower.get("_settings") or {}
+        return {
+            "heading": settings.get("courseAngle"),
+            "last_updated": self._location.get("lastUpdated"),
+        }
