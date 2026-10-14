@@ -239,6 +239,7 @@ async def async_setup_entry(
         for desc in SENSOR_DESCRIPTIONS
     ]
     entities += [ImowTimeRemainingSensor(coordinator, mower_id) for mower_id in coordinator.data]
+    entities += [ImowErrorMessageSensor(coordinator, mower_id) for mower_id in coordinator.data]
     async_add_entities(entities)
 
 
@@ -304,3 +305,38 @@ class ImowTimeRemainingSensor(ImowEntity, SensorEntity):
         if end is None:
             return None
         return max(0, round((end - dt_util.utcnow()).total_seconds() / 60))
+
+
+class ImowErrorMessageSensor(ImowEntity, SensorEntity):
+    """What the active errors are, in the myimow app's words ("Guide wire error")."""
+
+    _attr_name = "Error Message"
+    _attr_icon = "mdi:alert-circle-outline"
+
+    def __init__(self, coordinator: ImowCoordinator, mower_id: str) -> None:
+        super().__init__(coordinator, mower_id, "error_message")
+
+    def _errors(self) -> list[dict[str, Any]]:
+        active = deep_get(self.mower, ("device", "errorsActive")) or []
+        errors = []
+        for err in sorted(active, key=lambda e: str(e.get("activeSince") or "")):
+            code = str(err.get("code") or "")
+            text = self.coordinator.error_texts.get(code.lstrip("0") or code, {})
+            errors.append({
+                "code": code,
+                "headline": text.get("headline") or f"Error {code}",
+                "description": text.get("description"),
+                "active_since": err.get("activeSince"),
+                "required_action": err.get("requiredAction"),
+            })
+        return errors
+
+    @property
+    def native_value(self) -> str:
+        """The headlines, oldest first; "none" when there's no active error."""
+        headlines = list(dict.fromkeys(e["headline"] for e in self._errors()))
+        return ", ".join(headlines)[:255] if headlines else "none"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {"errors": self._errors()}

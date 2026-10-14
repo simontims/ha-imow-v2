@@ -20,6 +20,7 @@ from .const import (
     API_MOWING_PLAN,
     API_SIGNALR_NEG,
     CMD_FORCE_UPDATE,
+    ERROR_TEXTS_URL,
     USER_AGENT,
 )
 
@@ -93,6 +94,39 @@ class ImowApi:
     async def negotiate_signalr(self) -> dict[str, Any]:
         """Return {url, accessToken} for the Azure SignalR ``deviceevents`` hub."""
         return await self._post(API_SIGNALR_NEG, None) or {}
+
+    async def get_error_texts(self, locale: str) -> dict[str, dict[str, str]]:
+        """Return {code: {headline, description}} from the myimow web app's translations.
+
+        A public static file, so no token is sent. Codes are unpadded ("65668"),
+        as the mower reports them in ``device.errorsActive``.
+        """
+        url = ERROR_TEXTS_URL.format(locale=locale)
+        try:
+            async with self._session.get(
+                url, headers={"Accept": "application/json", "User-Agent": USER_AGENT},
+                timeout=_REQUEST_TIMEOUT,
+            ) as resp:
+                if resp.status >= 400:
+                    raise ImowApiError(f"GET {url} → {resp.status}")
+                messages = await resp.json(content_type=None)
+        except (aiohttp.ClientError, asyncio.TimeoutError, JSONDecodeError) as err:
+            raise ImowApiError(f"GET {url}: {err!r}") from err
+        if not isinstance(messages, dict):
+            raise ImowApiError(f"GET {url}: unexpected content")
+        texts: dict[str, dict[str, str]] = {}
+        for key, value in messages.items():
+            if not key.startswith("dB_errorDetails_"):
+                continue
+            kind, _, code = key.removeprefix("dB_errorDetails_").partition("_dtc_")
+            if kind not in ("headline", "description") or not code.isdigit():
+                continue
+            # Compiled ICU messages: a list of parts; type 0 is literal text
+            text = value if isinstance(value, str) else "".join(
+                str(p.get("value", "")) for p in value if isinstance(p, dict)
+            )
+            texts.setdefault(str(int(code)), {})[kind] = text.strip()
+        return texts
 
     # ------------------------------------------------------------------
     # Internal helpers

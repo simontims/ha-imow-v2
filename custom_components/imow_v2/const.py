@@ -25,6 +25,14 @@ API_ADVICES         = f"{API_BASE}/api/v1/advices/{{id}}"
 API_COMMAND         = f"{API_BASE}/mowerctrl/api/v1/mower-commands/{{id}}/{{cmd}}"
 API_SIGNALR_NEG     = f"{API_BASE}/signalr/api/v1/negotiate?negotiateVersion=1"
 
+# The myimow web app's translations; error texts are keys dB_errorDetails_{headline,description}_dtc_<6-digit code>
+ERROR_TEXTS_URL     = "https://myimow.stihl.com/app-i18n-messages/{locale}.json"
+ERROR_TEXT_LOCALES  = (
+    "bg-BG", "cs-CZ", "da-DK", "de", "de-DE", "el-GR", "en-GB", "en-US", "es-ES", "es-US",
+    "et-EE", "fi-FI", "fr-FR", "hr-HR", "hu-HU", "it-IT", "lt-LT", "lv-LV", "nb-NO", "nl-NL",
+    "pl-PL", "pt-PT", "ro-RO", "ru-RU", "sk-SK", "sl-SI", "sr-Latn-RS", "sr-RS", "sv-SE", "uk-UA",
+)
+
 # Mower commands (POST mower-commands/{id}/{cmd})
 CMD_START           = "start-mowing"
 CMD_PAUSE           = "pause"

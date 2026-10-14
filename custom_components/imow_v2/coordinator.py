@@ -26,6 +26,7 @@ from .api import ImowApi, ImowApiError
 from .auth import ImowAuth, ImowAuthError, ImowTokenRejected
 from .const import (
     DOMAIN,
+    ERROR_TEXT_LOCALES,
     OVERALL_STATE_GROUPS,
     SIGNALR_ADVICES,
     SIGNALR_PLAN,
@@ -100,6 +101,7 @@ class ImowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.options_snapshot: dict[str, Any] = {}
         self._tracking_interval_s = tracking_interval_s
         self._tracking: dict[str, asyncio.Task] = {}
+        self.error_texts: dict[str, dict[str, str]] = {}  # code → {headline, description}
 
     # ------------------------------------------------------------------
     # Authentication
@@ -153,7 +155,24 @@ class ImowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except (ImowAuthError, ImowApiError) as err:
             raise UpdateFailed(str(err)) from err
 
+    def _error_text_locale(self) -> str:
+        """HA's language as a myimow locale ("en" → "en-GB"), else en-GB."""
+        lang = self.hass.config.language or "en"
+        if lang in ERROR_TEXT_LOCALES:
+            return lang
+        return next((loc for loc in ERROR_TEXT_LOCALES if loc.startswith(f"{lang.split('-')[0]}-")),
+                    "en-GB")
+
+    async def _load_error_texts(self) -> None:
+        """Fetch the error texts once; retried on each poll until it works."""
+        try:
+            self.error_texts = await self._api.get_error_texts(self._error_text_locale())
+        except ImowApiError as err:
+            _LOGGER.debug("Error texts not loaded (will retry): %s", err)
+
     async def _fetch_all(self) -> dict[str, Any]:
+        if not self.error_texts:
+            await self._load_error_texts()
         mowers = await self._call(self._api.get_mowers)
         live = self.signalr is not None and self.signalr.connected
 
