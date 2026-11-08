@@ -31,7 +31,21 @@ Other Gen5+ models should work but are untested.
 
 ---
 
-## Installation via HACS
+## Installation
+
+This integration is installed as a custom repository. It is not in the default catalog.
+
+### Home Assistant 2026.11 or newer (Marketplace)
+
+1. Go to **Settings → Marketplace**.
+2. In the upper-right corner, select **Add from link**.
+3. Under **GitHub link**, enter `https://github.com/simontims/ha-imow-v2` and select **Add**. If you are asked for a **Type**, choose the integration type and select **Add** again.
+4. Open **STIHL iMow v2** in the list and install it.
+5. If a repair under **Settings → System → Repairs** asks for a restart, restart Home Assistant.
+
+Adding a custom repository needs a connected GitHub account. The Marketplace asks you to connect one when you add the repository, and it only reads public information.
+
+### Older versions (HACS)
 
 1. Open HACS in your Home Assistant instance.
 2. Go to **Integrations → Custom repositories**.
@@ -170,7 +184,7 @@ This is a fork of [aquarius72/ha-imow-v2](https://github.com/aquarius72/ha-imow-
 
 ### Coming from aquarius72/ha-imow-v2?
 
-This fork keeps the same integration domain (`imow_v2`), so it replaces the original in place: remove the old custom repository from HACS, add this one, install, and restart. Your existing setup and entities stay. Some entities were renamed or removed in the rework, so check dashboards and automations afterwards.
+This fork keeps the same integration domain (`imow_v2`), so it replaces the original in place: remove the old custom repository from the Marketplace or HACS, add this one, install, and restart. Your existing setup and entities stay. Some entities were renamed or removed in the rework, so check dashboards and automations afterwards.
 
 ## License
 
