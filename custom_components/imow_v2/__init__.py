@@ -33,10 +33,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up iMow from a config entry."""
     # Own session without a cookie jar: STIHL's B2C token endpoint sets cookies,
     # and when they are sent back it answers a refresh with an HTML page instead
-    # of tokens, so every refresh after the first failed with a shared session
-    session = async_create_clientsession(
-        hass, auto_cleanup=False, cookie_jar=aiohttp.DummyCookieJar()
-    )
+    # of tokens, so every refresh after the first failed with a shared session.
+    # HA cleans this session up itself when the entry unloads or setup fails
+    session = async_create_clientsession(hass, cookie_jar=aiohttp.DummyCookieJar())
     auth = ImowAuth(session)
 
     # Restore tokens from stored data; only log in with the password when STIHL
@@ -53,15 +52,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await auth.login(entry.data["username"], entry.data["password"])
     except ImowInvalidCredentials as err:
         # Wrong or changed password: HA shows a "Re-authenticate" prompt
-        await session.close()
         raise ConfigEntryAuthFailed("STIHL rejected the email or password") from err
     except ImowAuthError as err:
-        await session.close()
         raise ConfigEntryNotReady(f"Could not authenticate with STIHL cloud: {err}") from err
     except aiohttp.ClientError as err:
-        await session.close()
         raise ConfigEntryNotReady(f"Network not ready: {err}") from err
-    entry.async_on_unload(session.close)
     _async_migrate_unique_id(hass, entry, auth)
 
     api = ImowApi(session, auth)
